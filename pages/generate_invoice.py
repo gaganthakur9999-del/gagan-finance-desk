@@ -98,8 +98,18 @@ def page_generate_invoice():
 
     if st.session_state.get("generated"):
         st.success("✅ Invoice generated and saved!")
+        
+        # Show HTML preview (works everywhere - PC, phone, tablet, no extra software)
+        if st.session_state.get("html_file") and os.path.exists(st.session_state.html_file):
+            with open(st.session_state.html_file, "r", encoding="utf-8") as f:
+                html_content = f.read()
+            st.markdown(html_content, unsafe_allow_html=True)
+            st.caption("📱 Invoice preview - works on all devices")
+        
+        # Fallback: Show PNG image if available (Windows only with Word + poppler)
         if st.session_state.get("image_file") and os.path.exists(st.session_state.image_file):
-            st.image(st.session_state.image_file, caption="Invoice Preview", width=700)
+            st.image(st.session_state.image_file, caption="Invoice Preview (PNG)", width=700)
+        
         st.markdown("<div style='margin-top:10px'>", unsafe_allow_html=True)
         download_generated_files()
         st.markdown("</div>", unsafe_allow_html=True)
@@ -118,7 +128,7 @@ def page_generate_invoice():
             st.stop()
         try:
             with st.spinner("🔄 Generating invoice document..."):
-                docx_file, pdf_file, image_file = generate_invoice(data, invoice_no, invoice_date, serial_no)
+                docx_file, pdf_file, image_file, html_file = generate_invoice(data, invoice_no, invoice_date, serial_no)
             with st.spinner("💾 Saving to database..."):
                 db.add_record(
                     invoice_no=invoice_no, data=data, serial_no=serial_no,
@@ -138,6 +148,7 @@ def page_generate_invoice():
             st.session_state.docx_file = docx_file
             st.session_state.pdf_file = pdf_file
             st.session_state.image_file = image_file
+            st.session_state.html_file = html_file
             st.session_state.generated_invoice_no = invoice_no
             st.success(f"✅ Invoice #{invoice_no} generated and saved successfully!")
             log_activity("INVOICE_GENERATED", f"Invoice {invoice_no} for {data['name']}")

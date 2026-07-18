@@ -310,10 +310,11 @@ def page_records():
                     try:
                         regen_data["price"] = edit_price
                         with st.spinner("🔄 Generating..."):
-                            d, p, img = generate_invoice(regen_data, edit_invoice, edit_date, edit_serial)
+                            d, p, img, h = generate_invoice(regen_data, edit_invoice, edit_date, edit_serial)
                         st.session_state.docx_file = d
                         st.session_state.pdf_file = p
                         st.session_state.image_file = img
+                        st.session_state.html_file = h
                         st.session_state.generated = True
                         st.session_state.generated_invoice_no = edit_invoice
                         del st.session_state.regenerate_id
@@ -329,11 +330,20 @@ def page_records():
             del st.session_state.regenerate_id
             st.rerun()
 
-    if st.session_state.get("generated") and st.session_state.get("image_file"):
+    if st.session_state.get("generated"):
         st.markdown("---")
         st.success("✅ Invoice regenerated successfully!")
-        if os.path.exists(st.session_state.image_file):
-            st.image(st.session_state.image_file, caption="Regenerated Invoice Preview", width=700)
+        
+        # Show HTML preview (works everywhere - PC, phone, tablet)
+        if st.session_state.get("html_file") and os.path.exists(st.session_state.html_file):
+            with open(st.session_state.html_file, "r", encoding="utf-8") as f:
+                html_content = f.read()
+            st.markdown(html_content, unsafe_allow_html=True)
+            st.caption("📱 Invoice preview - works on all devices")
+        
+        # Fallback: Show PNG if available (Windows only)
+        if st.session_state.get("image_file") and os.path.exists(st.session_state.image_file):
+            st.image(st.session_state.image_file, caption="Regenerated Invoice Preview (PNG)", width=700)
         rd1, rd2, rd3 = st.columns(3)
         if st.session_state.get("docx_file") and os.path.exists(st.session_state.docx_file):
             with open(st.session_state.docx_file, "rb") as f1:
@@ -351,7 +361,7 @@ def page_records():
                     st.download_button("⬇️ Download PNG", f3,
                         file_name=os.path.basename(st.session_state.image_file), width="stretch")
         if st.button("✅ Done - Back to Records", width="stretch"):
-            for key in ["generated", "docx_file", "pdf_file", "image_file", "generated_invoice_no"]:
+            for key in ["generated", "docx_file", "pdf_file", "image_file", "html_file", "generated_invoice_no"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
