@@ -4,12 +4,17 @@ Formatting, parsing, validation, and reusable utilities.
 """
 import logging
 import os
+import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
 import database as db
+
+
+# Detect if we're on Windows (local) or Linux (Render cloud)
+IS_WINDOWS = sys.platform == "win32"
 
 
 def show_error(message, exc=None):
@@ -122,10 +127,19 @@ def validate_before_generate(invoice_no, invoice_date, serial_no, data, settings
                 errors.append("❌ Product price must be greater than 0.")
         except ValueError:
             errors.append("❌ Product price must be a valid number.")
-    if not os.path.exists(settings["template_path"]):
-        errors.append(f"❌ Template file not found: {settings['template_path']}")
-    if settings.get("poppler_path") and not os.path.exists(settings["poppler_path"]):
-        errors.append(f"❌ Poppler folder not found: {settings['poppler_path']}")
+    # Template check - on Linux/Render, template is in current directory
+    tmpl_path = settings.get("template_path", "template.docx")
+    if not os.path.exists(tmpl_path):
+        # On Render, fallback to current directory
+        if not IS_WINDOWS:
+            tmpl_path = "template.docx"
+        if not os.path.exists(tmpl_path):
+            errors.append(f"❌ Template file not found: {tmpl_path}")
+
+    # Poppler check - only on Windows (unavailable on Linux/Render)
+    if IS_WINDOWS and settings.get("poppler_path"):
+        if not os.path.exists(settings["poppler_path"]):
+            errors.append(f"❌ Poppler folder not found: {settings['poppler_path']}")
     if db.check_invoice_exists(invoice_no):
         errors.append(f"❌ Invoice number '{invoice_no}' already exists.")
     if db.check_serial_exists(serial_no):
