@@ -1,0 +1,33 @@
+# Temp files
+temp/
+Backups/
+logs/
+Excel/
+config/settings.json
+
+# Database (local only - cloud uses PostgreSQL)
+data/finance.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Streamlit
+.streamlit/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Desktop.ini
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+*.env.local
