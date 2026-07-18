@@ -1,6 +1,6 @@
 """
 Invoice generation module for Gagan's Finance Desk.
-Handles DOCX generation, HTML preview, and invoice numbering.
+Handles DOCX generation, HTML preview, and PDF generation.
 Works on both Windows (local) and Linux (Render cloud).
 """
 import json
@@ -9,6 +9,7 @@ import os
 import re
 import sys
 from datetime import datetime
+from io import BytesIO
 
 import streamlit as st
 from docxtpl import DocxTemplate
@@ -32,6 +33,13 @@ if IS_WINDOWS:
 else:
     HAS_PDF_SUPPORT = False
 
+# fpdf2 works on all platforms (Windows, Linux, Mac)
+try:
+    from fpdf import FPDF
+    HAS_FPDF = True
+except ImportError:
+    HAS_FPDF = False
+
 
 def invoice_sort_key(invoice_no):
     match = re.search(r"(\d+)$", str(invoice_no or ""))
@@ -53,11 +61,11 @@ def suggest_next_invoice(settings):
     return f"{prefix}{int(number) + 1:0{len(number)}d}"
 
 
-def generate_html_preview(data, invoice_no, invoice_date, serial_no) -> str:
+def generate_pdf(data, invoice_no, invoice_date, serial_no, safe_name) -> str:
     """
-    Generate an HTML invoice string that can be displayed inline.
-    This works on ALL platforms - no Word, no Poppler needed.
-    Returns HTML as a string, mobile-responsive with dark/light support.
+    Generate a clean PDF invoice using fpdf2.
+    Works on ALL platforms (Windows, Linux, Mac).
+    Returns path to the generated PDF file.
     """
     price_value = float(clean_amount(data.get("price", 0)))
     gst_rate = float(settings.get("gst_rate", 18.0))
@@ -67,11 +75,153 @@ def generate_html_preview(data, invoice_no, invoice_date, serial_no) -> str:
     cgst = round(taxable_value * (cgst_rate / 100), 2)
     sgst = round(taxable_value * (sgst_rate / 100), 2)
     total_tax = round(cgst + sgst, 2)
-    total_amount = round(taxable_value + total_tax, 2)
-    
+
     price_in_words = num2words(price_value).title()
     tax_words = num2words(total_tax).title()
-    
+
+    name = data.get("name", "")
+    mobile = data.get("mobile", "")
+    address = data.get("address", "")
+    product = data.get("product", "")
+    bid = data.get("bid", "")
+    emi = data.get("emi", "")
+    di = data.get("di", "")
+    scheme = data.get("scheme", "")
+
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.add_page()
+
+    # Colors
+    accent = (46, 90, 124)
+    dark = (30, 40, 60)
+    gray = (100, 110, 120)
+    light_gray = (245, 245, 245)
+    white = (255, 255, 255)
+    border_c = (200, 200, 200)
+
+    # Header
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(*accent)
+    pdf.cell(0, 10, "GAGAN'S FINANCE DESK", 0, 1, "C")
+    pdf.set_draw_color(*accent)
+    pdf.line(10, 18, 200, 18)
+
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*gray)
+    pdf.cell(0, 5, f"Invoice No: {invoice_no}    |    Date: {invoice_date}", 0, 1, "C")
+    pdf.ln(6)
+
+    # Customer section
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(*dark)
+    pdf.cell(0, 6, "Customer Details", 0, 1, "L")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*dark)
+
+    data_rows = [
+        ("Customer:", name),
+        ("Phone:", mobile),
+        ("Address:", address),
+        ("Product:", product),
+        ("Serial / IMEI:", serial_no),
+    ]
+    for label, value in data_rows:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(30, 5, label, 0, 0, "L")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 5, value, 0, 1, "L")
+
+    pdf.ln(4)
+
+    # Price table
+    col1_w = 120
+    col2_w = 60
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(*accent)
+    pdf.set_text_color(*white)
+    pdf.cell(col1_w, 7, "  Description", 1, 0, "L", True)
+    pdf.cell(col2_w, 7, "Amount", 1, 1, "C", True)
+
+    pdf.set_text_color(*dark)
+    price_rows = [
+        ("Product Price", format_amount(price_value)),
+        ("Taxable Value", format_amount(taxable_value)),
+        (f"CGST @ {cgst_rate}%", format_amount(cgst)),
+        (f"SGST @ {sgst_rate}%", format_amount(sgst)),
+    ]
+
+    fill = False
+    for label, val in price_rows:
+        bg = light_gray if fill else white
+        pdf.set_fill_color(*bg)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(col1_w, 6, f"  {label}", 1, 0, "L", True)
+        pdf.cell(col2_w, 6, f"  {val}", 1, 1, "R", True)
+        fill = not fill
+
+    # Total row
+    total_amount = round(taxable_value + total_tax, 2)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_fill_color(*accent)
+    pdf.set_text_color(*white)
+    pdf.cell(col1_w, 8, "  Total", 1, 0, "L", True)
+    pdf.cell(col2_w, 8, f"  {format_amount(total_amount)}", 1, 1, "R", True)
+
+    pdf.ln(4)
+    pdf.set_text_color(*dark)
+
+    # Finance info
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 6, "Finance Details", 0, 1, "L")
+    pdf.set_font("Helvetica", "", 9)
+    fin_rows = [
+        ("BID / DO ID:", bid),
+        ("EMI / DI:", f"{emi} / {di}"),
+        ("Scheme:", scheme),
+    ]
+    for label, value in fin_rows:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(30, 5, label, 0, 0, "L")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 5, value, 0, 1, "L")
+
+    pdf.ln(6)
+
+    # Amount in words
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(*gray)
+    pdf.cell(0, 4, f"Amount in words: {price_in_words}", 0, 1, "L")
+    pdf.cell(0, 4, f"Tax in words: {tax_words}", 0, 1, "L")
+
+    # Footer
+    pdf.ln(10)
+    pdf.set_draw_color(*border_c)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(*gray)
+    pdf.cell(0, 4, "Gagan's Finance Desk - Generated automatically", 0, 1, "C")
+
+    pdf_file = os.path.join(TEMP_DIR, f"Invoice_{safe_name}.pdf")
+    pdf.output(pdf_file)
+    return pdf_file
+
+
+def generate_html_preview(data, invoice_no, invoice_date, serial_no) -> str:
+    price_value = float(clean_amount(data.get("price", 0)))
+    gst_rate = float(settings.get("gst_rate", 18.0))
+    cgst_rate = float(settings.get("cgst_rate", 9.0))
+    sgst_rate = float(settings.get("sgst_rate", 9.0))
+    taxable_value = round(price_value / (1 + gst_rate / 100), 2)
+    cgst = round(taxable_value * (cgst_rate / 100), 2)
+    sgst = round(taxable_value * (sgst_rate / 100), 2)
+    total_tax = round(cgst + sgst, 2)
+    total_amount = round(taxable_value + total_tax, 2)
+
+    price_in_words = num2words(price_value).title()
+    tax_words = num2words(total_tax).title()
+
     address = data.get("address", "")
     mobile = data.get("mobile", "")
     product = data.get("product", "")
@@ -80,64 +230,54 @@ def generate_html_preview(data, invoice_no, invoice_date, serial_no) -> str:
     emi = data.get("emi", "")
     di = data.get("di", "")
     scheme = data.get("scheme", "")
-    
-    # Determine if dark or light theme
-    theme = settings.get("theme", "dark")
-    is_dark = theme == "dark"
-    
-    bg = "#1a1f2e" if is_dark else "#ffffff"
-    text = "#e0e4ea" if is_dark else "#1a1d23"
-    border = "#2a3344" if is_dark else "#dde1e6"
-    header_bg = "#232a3a" if is_dark else "#f0f2f6"
-    accent = "#5B8DB8" if is_dark else "#2E5A7C"
-    
-    html = f"""<div style="background:{bg}; color:{text}; border:1px solid {border}; border-radius:10px; padding:20px; max-width:800px; margin:10px auto; font-family:Arial,sans-serif;">
-    <div style="text-align:center; border-bottom:2px solid {accent}; padding-bottom:12px; margin-bottom:16px;">
-        <h2 style="margin:0; color:{accent}; font-size:22px;">GAGAN'S FINANCE DESK</h2>
-        <p style="margin:4px 0 0 0; font-size:12px; color:{text if is_dark else '#666'};">
+
+    html = f"""<div style="background:white; color:#1a1d23; border:1px solid #dde1e6; border-radius:10px; padding:20px; max-width:800px; margin:10px auto; font-family:Arial,sans-serif;">
+    <div style="text-align:center; border-bottom:2px solid #2E5A7C; padding-bottom:12px; margin-bottom:16px;">
+        <h2 style="margin:0; color:#2E5A7C; font-size:22px;">GAGAN'S FINANCE DESK</h2>
+        <p style="margin:4px 0 0 0; font-size:12px; color:#666;">
             Invoice No: <strong>{invoice_no}</strong> &nbsp;|&nbsp; Date: <strong>{invoice_date}</strong>
         </p>
     </div>
     <table style="width:100%; border-collapse:collapse; font-size:14px;">
-        <tr><td style="padding:4px 8px; width:30%; font-weight:bold; color:{accent};">Customer:</td>
+        <tr><td style="padding:4px 8px; width:30%; font-weight:bold; color:#2E5A7C;">Customer:</td>
             <td style="padding:4px 8px;">{name}</td></tr>
-        <tr><td style="padding:4px 8px; font-weight:bold; color:{accent};">Phone:</td>
+        <tr><td style="padding:4px 8px; font-weight:bold; color:#2E5A7C;">Phone:</td>
             <td style="padding:4px 8px;">{mobile}</td></tr>
-        <tr><td style="padding:4px 8px; font-weight:bold; color:{accent};">Address:</td>
+        <tr><td style="padding:4px 8px; font-weight:bold; color:#2E5A7C;">Address:</td>
             <td style="padding:4px 8px;">{address}</td></tr>
-        <tr><td style="padding:4px 8px; font-weight:bold; color:{accent};">Product:</td>
+        <tr><td style="padding:4px 8px; font-weight:bold; color:#2E5A7C;">Product:</td>
             <td style="padding:4px 8px;">{product}</td></tr>
-        <tr><td style="padding:4px 8px; font-weight:bold; color:{accent};">Serial / IMEI:</td>
+        <tr><td style="padding:4px 8px; font-weight:bold; color:#2E5A7C;">Serial / IMEI:</td>
             <td style="padding:4px 8px;">{serial_no}</td></tr>
     </table>
-    <hr style="border:none; border-top:1px solid {border}; margin:12px 0;">
+    <hr style="border:none; border-top:1px solid #dde1e6; margin:12px 0;">
     <table style="width:100%; border-collapse:collapse; font-size:14px;">
-        <tr style="background:{header_bg};">
-            <th style="padding:8px; text-align:left; border:1px solid {border};">Description</th>
-            <th style="padding:8px; text-align:right; border:1px solid {border};">Amount</th>
+        <tr style="background:#f0f2f6;">
+            <th style="padding:8px; text-align:left; border:1px solid #dde1e6;">Description</th>
+            <th style="padding:8px; text-align:right; border:1px solid #dde1e6;">Amount</th>
         </tr>
-        <tr><td style="padding:8px; border:1px solid {border};">Product Price</td>
-            <td style="padding:8px; text-align:right; border:1px solid {border};">{format_amount(price_value)}</td></tr>
-        <tr><td style="padding:8px; border:1px solid {border};">Taxable Value</td>
-            <td style="padding:8px; text-align:right; border:1px solid {border};">{format_amount(taxable_value)}</td></tr>
-        <tr><td style="padding:8px; border:1px solid {border};">CGST @ {cgst_rate}%</td>
-            <td style="padding:8px; text-align:right; border:1px solid {border};">{format_amount(cgst)}</td></tr>
-        <tr><td style="padding:8px; border:1px solid {border};">SGST @ {sgst_rate}%</td>
-            <td style="padding:8px; text-align:right; border:1px solid {border};">{format_amount(sgst)}</td></tr>
-        <tr style="font-weight:bold; background:{header_bg};">
-            <td style="padding:8px; border:1px solid {border};">Total</td>
-            <td style="padding:8px; text-align:right; border:1px solid {border}; color:{accent}; font-size:16px;">{format_amount(total_amount)}</td></tr>
+        <tr><td style="padding:8px; border:1px solid #dde1e6;">Product Price</td>
+            <td style="padding:8px; text-align:right; border:1px solid #dde1e6;">{format_amount(price_value)}</td></tr>
+        <tr><td style="padding:8px; border:1px solid #dde1e6;">Taxable Value</td>
+            <td style="padding:8px; text-align:right; border:1px solid #dde1e6;">{format_amount(taxable_value)}</td></tr>
+        <tr><td style="padding:8px; border:1px solid #dde1e6;">CGST @ {cgst_rate}%</td>
+            <td style="padding:8px; text-align:right; border:1px solid #dde1e6;">{format_amount(cgst)}</td></tr>
+        <tr><td style="padding:8px; border:1px solid #dde1e6;">SGST @ {sgst_rate}%</td>
+            <td style="padding:8px; text-align:right; border:1px solid #dde1e6;">{format_amount(sgst)}</td></tr>
+        <tr style="font-weight:bold; background:#f0f2f6;">
+            <td style="padding:8px; border:1px solid #dde1e6;">Total</td>
+            <td style="padding:8px; text-align:right; border:1px solid #dde1e6; color:#2E5A7C; font-size:16px;">{format_amount(total_amount)}</td></tr>
     </table>
-    <hr style="border:none; border-top:1px solid {border}; margin:12px 0;">
+    <hr style="border:none; border-top:1px solid #dde1e6; margin:12px 0;">
     <table style="width:100%; border-collapse:collapse; font-size:14px;">
-        <tr><td style="padding:4px 8px; width:30%; font-weight:bold; color:{accent};">BID / DO ID:</td>
+        <tr><td style="padding:4px 8px; width:30%; font-weight:bold; color:#2E5A7C;">BID / DO ID:</td>
             <td style="padding:4px 8px;">{bid}</td></tr>
-        <tr><td style="padding:4px 8px; font-weight:bold; color:{accent};">EMI / DI:</td>
+        <tr><td style="padding:4px 8px; font-weight:bold; color:#2E5A7C;">EMI / DI:</td>
             <td style="padding:4px 8px;">{emi} / {di}</td></tr>
-        <tr><td style="padding:4px 8px; font-weight:bold; color:{accent};">Scheme:</td>
+        <tr><td style="padding:4px 8px; font-weight:bold; color:#2E5A7C;">Scheme:</td>
             <td style="padding:4px 8px;">{scheme}</td></tr>
     </table>
-    <p style="font-size:12px; margin-top:12px; font-style:italic; color:{'#9aa3b2' if is_dark else '#888'};">
+    <p style="font-size:12px; margin-top:12px; font-style:italic; color:#888;">
         Amount in words: <strong>{price_in_words}</strong><br>
         Tax in words: <strong>{tax_words}</strong>
     </p>
@@ -147,8 +287,8 @@ def generate_html_preview(data, invoice_no, invoice_date, serial_no) -> str:
 
 def generate_invoice(data, invoice_no, invoice_date, serial_no):
     """
-    Generate invoice as DOCX + HTML preview (works everywhere).
-    On Windows, also generates PDF/PNG preview.
+    Generate invoice as DOCX + HTML preview + PDF.
+    DOCX from template - PDF from fpdf2 (works on all platforms).
     """
     template = DocxTemplate(settings["template_path"])
     price_value = float(clean_amount(data["price"]))
@@ -169,40 +309,50 @@ def generate_invoice(data, invoice_no, invoice_date, serial_no):
     }
     safe_invoice_no = re.sub(r"[^A-Za-z0-9_-]+", "_", invoice_no)
     docx_file = os.path.join(TEMP_DIR, f"Invoice_{safe_invoice_no}.docx")
-    
+
     template.render(context)
     template.save(docx_file)
-    
+
     # Generate HTML preview (works everywhere)
     html_preview = generate_html_preview(data, invoice_no, invoice_date, serial_no)
     html_file = os.path.join(TEMP_DIR, f"Invoice_{safe_invoice_no}.html")
     with open(html_file, "w", encoding="utf-8") as f:
         f.write(html_preview)
-    
-    # PDF support only on Windows (requires Word + poppler)
+
+    # Generate PDF using fpdf2 (works on ALL platforms - Windows, Linux, Mac)
     pdf_file = ""
     image_file = ""
-    
+    try:
+        if HAS_FPDF:
+            pdf_file = generate_pdf(data, invoice_no, invoice_date, serial_no, safe_invoice_no)
+    except Exception as e:
+        logging.warning(f"PDF generation via fpdf2 failed: {e}")
+        pdf_file = ""
+
+    # Windows-only: PDF/PNG from Word (extra, not needed for cloud)
     if IS_WINDOWS and HAS_PDF_SUPPORT:
         try:
-            pdf_file = os.path.join(TEMP_DIR, f"Invoice_{safe_invoice_no}.pdf")
-            image_file = os.path.join(TEMP_DIR, f"Invoice_{safe_invoice_no}.png")
-            
+            win_pdf = os.path.join(TEMP_DIR, f"Invoice_{safe_invoice_no}_win.pdf")
+            win_img = os.path.join(TEMP_DIR, f"Invoice_{safe_invoice_no}_win.png")
+
             pythoncom.CoInitialize()
             try:
-                convert(docx_file, pdf_file)
+                convert(docx_file, win_pdf)
             finally:
                 pythoncom.CoUninitialize()
-            
+
             poppler_path = settings.get("poppler_path") or None
-            images = convert_from_path(pdf_file, poppler_path=poppler_path)
+            images = convert_from_path(win_pdf, poppler_path=poppler_path)
             if images:
-                images[0].save(image_file, "PNG")
+                images[0].save(win_img, "PNG")
+
+            # Prefer Word-generated PDF if available
+            if not pdf_file or not os.path.exists(pdf_file):
+                pdf_file = win_pdf
+            image_file = win_img
         except Exception as e:
-            logging.warning(f"PDF preview generation skipped: {e}")
-            pdf_file = ""
-            image_file = ""
-    
+            logging.warning(f"Windows PDF preview skipped: {e}")
+
     return docx_file, pdf_file, image_file, html_file
 
 
@@ -223,14 +373,13 @@ def download_generated_files():
             with d1:
                 st.download_button("⬇️ Download Word", f1,
                     file_name=os.path.basename(st.session_state.docx_file), width="stretch")
-    
+
     if st.session_state.get("pdf_file") and os.path.exists(st.session_state.pdf_file):
         with open(st.session_state.pdf_file, "rb") as f2:
             with d2:
                 st.download_button("⬇️ Download PDF", f2,
                     file_name=os.path.basename(st.session_state.pdf_file), width="stretch")
-    
-    # PNG download button - show if it exists (Windows only)
+
     if st.session_state.get("image_file") and os.path.exists(st.session_state.image_file):
         with open(st.session_state.image_file, "rb") as f3:
             with d3:
