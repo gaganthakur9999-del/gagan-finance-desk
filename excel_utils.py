@@ -12,6 +12,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 from config import EXCEL_FILE, HEADERS
 from helpers import _normalize_date, _parse_date
+from database import month_sort_key
 import database as db
 
 
@@ -59,7 +60,7 @@ def export_to_excel(records):
         dt = _parse_date(bid_date)
         month = dt.strftime("%B_%Y").upper() if dt else (record.get("month", "") or "UNKNOWN")
         months_data.setdefault(month, []).append(record)
-    sorted_months = sorted(months_data.keys())
+    sorted_months = sorted(months_data.keys(), key=lambda m: (-month_sort_key(m)[0], -month_sort_key(m)[1]))
     for month in sorted_months:
         month_records = months_data[month]
         month_records = _sort_records_by_date_invoice(month_records)

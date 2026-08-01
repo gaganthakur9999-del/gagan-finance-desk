@@ -33,17 +33,35 @@ def extract_data(pdf_file):
             clean_chunk = raw_chunk.replace('"', "").replace(",", "")
             lines = [line.strip() for line in clean_chunk.split("\n") if line.strip()]
             data["product"] = " - ".join(lines).strip().upper()
-        price_match = re.search(r"Product\s*Price.*?([\d,]+\.\d+)", text)
+        price_match = re.search(
+            r"Product\s*Price:?\s*([\d,]+(?:\.\d+)?)",
+            text, re.IGNORECASE,
+        )
         if price_match:
             data["price"] = price_match.group(1).strip()
         mobile_match = re.search(r"Mobile\s*Number\s*:\s*(\d+)", text)
         if mobile_match:
             data["mobile"] = mobile_match.group(1).strip()
-        address_match = re.search(
-            r"Address of the customer for delivery:\s*(.*?)\s*Mobile Number:", text, re.S,
-        )
+        # Address: find the LAST address label (the real delivery address is at
+        # the bottom of the DO). Require a colon so the "EMI Anywhere ... Delivery
+        # address mentioned" banner at the top is NOT matched.
+        address_match = None
+        for m in re.finditer(
+            r"(?:Address of the customer for delivery|Delivery Address)\s*:",
+            text, re.IGNORECASE,
+        ):
+            address_match = m
         if address_match:
-            data["address"] = re.sub(r"\s+", " ", address_match.group(1)).strip()
+            start = address_match.end()
+            end = text.find("On the delivery of the product", start)
+            if end == -1:
+                end = len(text)
+            # If "Mobile Number:" appears AFTER the label, stop there,
+            # but only if it is within a reasonable distance below the label.
+            mob = re.search(r"Mobile Number:", text[start:end], re.IGNORECASE)
+            if mob and mob.start() < 500:
+                end = start + mob.start()
+            data["address"] = re.sub(r"\s+", " ", text[start:end]).strip()
         bid_match = re.search(r"DO\s*ID\s*:\s*([A-Z0-9]+)", text)
         if bid_match:
             data["bid"] = bid_match.group(1).strip()
@@ -62,3 +80,15 @@ def extract_data(pdf_file):
     except (OSError, ValueError) as exc:
         show_error("PDF extraction failed. Please check if the uploaded PDF is readable.", exc)
     return data
+
+
+def get_missing_fields(data):
+    """Return a list of missing critical fields for confidence warnings."""
+    missing = []
+    if not str(data.get("name") or "").strip():
+        missing.append("Name")
+    if not str(data.get("price") or "").strip():
+        missing.append("Price")
+    if not str(data.get("mobile") or "").strip():
+        missing.append("Mobile Number")
+    return missing

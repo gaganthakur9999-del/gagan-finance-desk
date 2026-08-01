@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
+from config import settings
 import database as db
 
 
@@ -94,7 +95,7 @@ def _format_month(month_key):
         return month_key.replace("_", " ").title()
 
 
-def validate_before_generate(invoice_no, invoice_date, serial_no, data, settings):
+def validate_before_generate(invoice_no, invoice_date, serial_no, data):
     errors = []
     invoice_no = str(invoice_no or "").strip()
     if not invoice_no:

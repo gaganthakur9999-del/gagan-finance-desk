@@ -53,6 +53,7 @@ logging.getLogger().setLevel(logging.ERROR)
 # =========================
 from ui_components import render_menu
 from pages.dashboard import page_dashboard
+from pages.emi_notification import page_emi_notification
 from pages.generate_invoice import page_generate_invoice
 from pages.records import page_records
 from pages.settings import page_settings
@@ -68,5 +69,7 @@ elif page == "Records":
     page_records()
 elif page == "Dashboard":
     page_dashboard()
+elif page == "EMI Notification":
+    page_emi_notification()
 else:
     page_settings()

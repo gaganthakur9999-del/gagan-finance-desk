@@ -9,9 +9,12 @@ pypdf>=3.0.0
 docxtpl>=0.11.0
 pdf2image>=1.16.0
 
-# DOCX to PDF conversion (works on all platforms - no Word needed)
-mammoth>=1.12.0
-weasyprint>=69.0
+# PDF Conversion (Windows only - requires Microsoft Word installed)
+pywin32>=306; sys_platform == "win32"
+docx2pdf>=0.1.8; sys_platform == "win32"
+
+# PDF Generation (works on all platforms - Windows, Linux, Mac)
+fpdf2>=2.8.0
 
 # Number to Words
 num2words>=0.5.10

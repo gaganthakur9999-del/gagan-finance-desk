@@ -7,6 +7,7 @@ import streamlit as st
 
 import calendar
 from config import settings
+from database import month_sort_key
 from helpers import _normalize_date, _parse_date
 from ui_components import app_header
 import database as db
@@ -39,7 +40,7 @@ def page_dashboard():
     if selected_month == "ALL_MONTHS":
         monthly_counts = stats.get("monthly_counts", {})
         if monthly_counts:
-            sorted_months = sorted(monthly_counts.keys())
+            sorted_months = sorted(monthly_counts.keys(), key=month_sort_key)
             chart_data = {m: monthly_counts[m] for m in sorted_months}
             st.bar_chart(chart_data, color="#4d8fad")
             st.caption("Records per month")

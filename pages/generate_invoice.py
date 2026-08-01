@@ -17,7 +17,7 @@ from invoice import (
     generate_invoice, save_backup, suggest_next_invoice,
     download_generated_files, reset_generation_state
 )
-from pdf_extract import extract_data
+from pdf_extract import extract_data, get_missing_fields
 from ui_components import (
     app_header, editable_customer_form, _show_month_cards, _show_manual_entry
 )
@@ -27,6 +27,7 @@ import database as db
 def page_generate_invoice():
     app_header()
 
+    # Quick stats
     all_records = db.load_all_records()
     today_dt = datetime.now()
     today_records = [r for r in all_records if _parse_date(r.get("bid_date", "")) and _parse_date(r.get("bid_date", "")).date() == today_dt.date()]
@@ -59,6 +60,10 @@ def page_generate_invoice():
         st.session_state.extracted_data = extract_data(uploaded_file)
 
     with st.expander("Auto Extracted Data", expanded=False):
+        missing_fields = get_missing_fields(st.session_state.extracted_data)
+        if missing_fields:
+            st.warning("⚠️ Not detected automatically — please check manually: "
+                       + ", ".join(missing_fields) + ".")
         st.dataframe(
             extracted_data_for_display(st.session_state.extracted_data),
             width="stretch", hide_index=True,
@@ -70,7 +75,7 @@ def page_generate_invoice():
     st.markdown("**Invoice Details**")
     c1, c2, c3 = st.columns([1, 1, 1.15])
     with c1:
-        default_inv = st.session_state.get("generated_invoice_no", suggest_next_invoice(settings))
+        default_inv = st.session_state.get("generated_invoice_no", suggest_next_invoice())
         invoice_no = st.text_input("Invoice Number", value=default_inv)
     with c2:
         invoice_date = st.text_input("Invoice Date", value=datetime.now().strftime("%d-%m-%Y"))
@@ -109,7 +114,7 @@ def page_generate_invoice():
         return
 
     if st.button("📄 Generate Invoice + Save", width="stretch", type="primary"):
-        errors = validate_before_generate(invoice_no, invoice_date, serial_no, data, settings)
+        errors = validate_before_generate(invoice_no, invoice_date, serial_no, data)
         if errors:
             st.error("❌ Please fix the following errors:")
             for error in errors:

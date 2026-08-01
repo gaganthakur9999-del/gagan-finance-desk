@@ -30,11 +30,11 @@ def _toggle_theme():
 
 
 def render_menu():
-    pages = ["Generate Invoice", "Records", "Dashboard", "Settings"]
+    pages = ["Generate Invoice", "Records", "Dashboard", "EMI Notification", "Settings"]
     if "page" not in st.session_state:
         st.session_state.page = "Generate Invoice"
 
-    cols = st.columns([1, 1, 1, 1, 1, 3])
+    cols = st.columns([1, 1, 1, 1, 1, 1, 2])
     for index, page_name in enumerate(pages):
         with cols[index]:
             is_active = st.session_state.page == page_name
@@ -43,7 +43,7 @@ def render_menu():
                 type="primary" if is_active else "secondary",
                 on_click=_navigate_to, args=(page_name,),
             )
-    with cols[4]:
+    with cols[5]:
         icon = "☀️" if settings.get("theme", "dark") == "dark" else "🌙"
         st.button(icon, key="theme_toggle", help="Toggle theme",
                   on_click=_toggle_theme, width="stretch")
@@ -81,7 +81,7 @@ def editable_customer_form(data):
 
 def _show_month_cards():
     """Show monthly summary cards when no PDF is uploaded."""
-    available = db.get_available_months()
+    available = db.get_available_months()[:4]
     if not available:
         st.info("No records yet. Upload a PDF or use manual entry below.")
         return
@@ -124,7 +124,7 @@ def _show_manual_entry():
             m_serial = st.text_input("Serial / IMEI", key="manual_serial")
         mc6, mc7, mc8 = st.columns(3)
         with mc6:
-            m_invoice = st.text_input("Invoice No", value=suggest_next_invoice(settings), key="manual_invoice")
+            m_invoice = st.text_input("Invoice No", value=suggest_next_invoice(), key="manual_invoice")
         with mc7:
             m_date = st.text_input("Invoice Date", value=datetime.now().strftime("%d-%m-%Y"), key="manual_date")
         with mc8:

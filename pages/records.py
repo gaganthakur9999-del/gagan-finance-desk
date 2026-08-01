@@ -23,10 +23,6 @@ import database as db
 def page_records():
     app_header()
 
-    # Unsaved-changes warning
-    if st.session_state.get("_form_dirty", False):
-        st.warning("⚠️ You have unsaved changes. Please save or cancel before leaving.", icon="⚠️")
-
     # Search + Download Excel on same row
     search_col, download_col = st.columns([3, 3])
     with search_col:
@@ -80,7 +76,10 @@ def page_records():
         page_size = st.selectbox("Per page", [20, 50, 100, 200], index=2)
     with sc4:
         st.markdown("<br>", unsafe_allow_html=True)
-        total_count = db.search_records(query=query, page=1, page_size=1)[1]
+        total_count = db.search_records(
+            query=query, month=rec_selected_month if rec_selected_month != "ALL_RECORDS" else "",
+            page=1, page_size=1,
+        )[1]
         st.caption(f"Total: {total_count} records")
 
     page = st.number_input("Page", min_value=1, value=1, step=1)
@@ -102,13 +101,11 @@ def page_records():
 
     records, total_count = db.search_records(
         query=query, name_filter=name_filter, phone_filter=phone_filter,
-        date_from=date_from, date_to=date_to, sort_by=sort_by,
-        sort_desc=sort_desc, page=page, page_size=page_size,
+        date_from=date_from, date_to=date_to,
+        month=rec_selected_month if rec_selected_month != "ALL_RECORDS" else "",
+        sort_by=sort_by, sort_desc=sort_desc, page=page, page_size=page_size,
     )
 
-    if rec_selected_month != "ALL_RECORDS" and records:
-        records = [r for r in records if r.get("month") == rec_selected_month]
-        total_count = len(records)
     if not records:
         st.info("No records found matching your criteria.")
         return
@@ -310,11 +307,10 @@ def page_records():
                     try:
                         regen_data["price"] = edit_price
                         with st.spinner("🔄 Generating..."):
-                            d, p, img, h = generate_invoice(regen_data, edit_invoice, edit_date, edit_serial)
+                            d, p, img = generate_invoice(regen_data, edit_invoice, edit_date, edit_serial)
                         st.session_state.docx_file = d
                         st.session_state.pdf_file = p
                         st.session_state.image_file = img
-                        st.session_state.html_file = h
                         st.session_state.generated = True
                         st.session_state.generated_invoice_no = edit_invoice
                         del st.session_state.regenerate_id
@@ -334,14 +330,7 @@ def page_records():
         st.markdown("---")
         st.success("✅ Invoice regenerated successfully!")
         
-        # Show HTML preview (works everywhere - PC, phone, tablet)
-        if st.session_state.get("html_file") and os.path.exists(st.session_state.html_file):
-            with open(st.session_state.html_file, "r", encoding="utf-8") as f:
-                html_content = f.read()
-            st.markdown(html_content, unsafe_allow_html=True)
-            st.caption("📱 Invoice preview - works on all devices")
-        
-        # Fallback: Show PNG if available (Windows only)
+        # Show PNG preview (Windows only)
         if st.session_state.get("image_file") and os.path.exists(st.session_state.image_file):
             st.image(st.session_state.image_file, caption="Regenerated Invoice Preview (PNG)", width=700)
         rd1, rd2, rd3 = st.columns(3)
@@ -361,7 +350,7 @@ def page_records():
                     st.download_button("⬇️ Download PNG", f3,
                         file_name=os.path.basename(st.session_state.image_file), width="stretch")
         if st.button("✅ Done - Back to Records", width="stretch"):
-            for key in ["generated", "docx_file", "pdf_file", "image_file", "html_file", "generated_invoice_no"]:
+            for key in ["generated", "docx_file", "pdf_file", "image_file", "generated_invoice_no"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
@@ -439,14 +428,12 @@ def page_records():
                             log_activity("RECORD_UPDATED", f"Record #{edit_id} updated")
                             st.success(f"✅ Record #{edit_id} updated!")
                             del st.session_state.editing_id
-                            st.session_state._form_dirty = False
                             st.rerun()
                         except (sqlite3.Error, ValueError) as e:
                             st.error(f"❌ Failed: {str(e)}")
                 with submit_col2:
                     if st.form_submit_button("Cancel", use_container_width=True):
                         del st.session_state.editing_id
-                        st.session_state._form_dirty = False
                         st.rerun()
         else:
             st.error(f"Record #{edit_id} not found.")
