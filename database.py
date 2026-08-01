@@ -1,7 +1,21 @@
 """
 Dual-mode database module for Gagan's Finance Desk.
-Works with SQLite (local desktop) and PostgreSQL (Render/Neon cloud).
-When DATABASE_URL environment variable is set, uses PostgreSQL.
+
+THIS FILE SUPPORTS TWO DATABASE BACKENDS:
+  - DESKTOP (local) uses SQLITE when DATABASE_URL is ABSENT.
+  - RENDER (cloud) uses POSTGRESQL/NEON when DATABASE_URL is PRESENT.
+
+NEITHER BACKEND MAY EVER BE REMOVED DURING REFACTORING.
+Any future change MUST preserve both backends. Removing either one
+causes data loss on that platform. This regression happened once already.
+
+BEFORE COMMITTING ANY CHANGE TO THIS FILE, VERIFY:
+  - DATABASE_URL support still exists.
+  - SQLite fallback still exists.
+  - get_connection() still supports both backends.
+  - Desktop uses SQLite.
+  - Render uses PostgreSQL.
+  - No backend was removed accidentally.
 """
 import json
 import logging
@@ -15,7 +29,12 @@ DB_DIR = "data"
 DB_FILE = os.path.join(DB_DIR, "finance.db")
 os.makedirs(DB_DIR, exist_ok=True)
 
+# DATABASE_URL: Render sets this to the Neon (PostgreSQL) connection string.
+# When present -> PostgreSQL; when absent -> SQLite (desktop).
+# CRITICAL SHARED INFRASTRUCTURE - both backends must always be preserved.
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+# USE_POSTGRES: True = PostgreSQL/Neon (Render), False = SQLite (desktop).
+# CRITICAL SHARED INFRASTRUCTURE - do not remove.
 USE_POSTGRES = bool(DATABASE_URL)
 
 if USE_POSTGRES:
@@ -27,6 +46,10 @@ _cache_time: float = 0
 _CACHE_TTL = 30
 
 
+# DUAL-BACKEND HELPERS ARE CRITICAL SHARED INFRASTRUCTURE.
+# Used by BOTH desktop (SQLite) and Render (PostgreSQL/Neon).
+# Do NOT remove.
+
 def _fix_sql(sql: str) -> str:
     """Convert SQLite placeholders (?) to PostgreSQL placeholders (%s)."""
     if USE_POSTGRES:
@@ -34,6 +57,7 @@ def _fix_sql(sql: str) -> str:
     return sql
 
 
+# CRITICAL SHARED INFRASTRUCTURE - used by both desktop (SQLite) and Render (PostgreSQL).
 def _execute(conn, sql: str, params: tuple = None, return_cursor: bool = False):
     """Execute SQL with proper parameter style for the database type."""
     sql = _fix_sql(sql)
@@ -53,6 +77,7 @@ def _execute(conn, sql: str, params: tuple = None, return_cursor: bool = False):
         return conn.execute(sql)
 
 
+# CRITICAL SHARED INFRASTRUCTURE - dual-backend fetch. Do not remove.
 def _fetchall(cursor):
     """Fetch all rows as list of dicts. Works for both psycopg2 and sqlite3."""
     if USE_POSTGRES:
@@ -62,6 +87,7 @@ def _fetchall(cursor):
     return [dict(row) for row in cursor.fetchall()]
 
 
+# CRITICAL SHARED INFRASTRUCTURE - dual-backend fetch. Do not remove.
 def _fetchone(cursor):
     """Fetch one row as dict or None. Works for both psycopg2 and sqlite3."""
     if USE_POSTGRES:
@@ -74,14 +100,17 @@ def _fetchone(cursor):
     return dict(row) if row else None
 
 
+# CRITICAL SHARED INFRASTRUCTURE - dual-backend commit. Do not remove.
 def _commit(conn):
     conn.commit()
 
 
+# CRITICAL SHARED INFRASTRUCTURE - dual-backend rollback. Do not remove.
 def _rollback(conn):
     conn.rollback()
 
 
+# CRITICAL SHARED INFRASTRUCTURE - dual-backend last row id. Do not remove.
 def _lastrowid(cursor) -> int:
     """Get last inserted row ID."""
     if USE_POSTGRES:
@@ -89,6 +118,7 @@ def _lastrowid(cursor) -> int:
     return cursor.lastrowid
 
 
+# CRITICAL SHARED INFRASTRUCTURE - dual-backend script execution. Do not remove.
 def _executescript(conn, script: str):
     """Execute a SQL script. Handles differences between SQLite and PostgreSQL."""
     if USE_POSTGRES:
@@ -105,6 +135,9 @@ def _executescript(conn, script: str):
         conn.executescript(script)
 
 
+# CRITICAL SHARED INFRASTRUCTURE - decides the backend.
+# Returns PostgreSQL when DATABASE_URL is present (Render), else SQLite (desktop).
+# Both backends MUST stay. Do not remove either branch.
 def get_connection():
     """If DATABASE_URL is set returns PostgreSQL, else SQLite (WAL)."""
     if USE_POSTGRES:
