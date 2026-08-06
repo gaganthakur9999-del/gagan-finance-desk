@@ -125,4 +125,22 @@ Some features below are no longer the primary path or are superseded (shown for 
 - **HTML invoice preview** (`invoice.py` — `sts.html`/weasyprint paths, commit `957bb58`, 18 Jul 2026): superseded by the final DOCX-based template flow; the codebase currently ships DOCX→PDF→PNG on Windows and DOCX-only download elsewhere. 🟡
 - **fpdf2 direct PDF** (`invoice.py` fpdf2 path, commit `8b8d00c`, 18 Jul 2026): listed in requirements but the active path uses `docxtpl` + optional `docx2pdf` (Windows) / `mammoth+weasyprint` (legacy commit). 🟡
 
+---
+
+## Current Feature Summary
+
+| Feature category | Current status |
+|------------------|----------------|
+| Core ledger & invoicing | ✅ Active |
+| PDF processing | ✅ Active |
+| Excel | ✅ Active |
+| Dashboard & statistics | ✅ Active |
+| Search & records | ✅ Active |
+| EMI notification | ✅ Active |
+| Settings & configuration | ✅ Active |
+| Synchronization & cloud | ✅ Active |
+| UI/UX | ✅ Active |
+| Performance | ✅ Active (5 Aug 2026 optimizations) |
+| Data-integrity & migration | ✅ Active |
+
 *End of FEATURE_HISTORY.md*

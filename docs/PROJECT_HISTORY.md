@@ -248,4 +248,19 @@ Late July 2026 — Cross-platform PDF (fpdf2/mammoth+weasyprint), sync scripts, 
 - ❓ Whether `Excel/ALL_RECORDS.xlsx`'s first creation (23 Jun) came from the import tool running against "59 records" (the `import_excel.py` docstring) — plausible but unverified sequence 🟡.
 - 🟡 Month-sheet data prior to the DB (Apr 2024–May 2026) existed only in Excel before the 3 Aug 2026 import; exact data-entry path before the app is unknown ❓.
 
+---
+
+## Historical Accuracy
+
+This document was reconstructed from **verified evidence**, not from memory or assumption:
+
+- **Git history** — `git log --all` (9 commits, 2026-07-18 → 2026-08-01), including commit dates, authors and messages.
+- **Recovery artifacts** — `Archive/Recovery_2026-08-03/` scripts, the recovery dry-run report, and the 03-Aug backup databases.
+- **Database inspection** — live SQLite/Neon comparisons, schema (`PRAGMA`), index and row-count audits.
+- **Activity logs** — `logs/activity.log` (invoice generation, sync activity).
+- **File timestamps** — creation and modification times for every project file (including `logs/errors.log`).
+- **Backups** — `Backups/*.json` per-invoice backups and `data/finance_backup_*.db` snapshots.
+
+Each milestone is labeled with a confidence level (✅ Verified / 🟡 Estimated / ❓ Unknown); anything not directly proven by the above is explicitly marked rather than assumed. No dates, versions, or events were invented.
+
 *End of PROJECT_HISTORY.md*

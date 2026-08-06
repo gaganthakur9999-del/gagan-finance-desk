@@ -330,4 +330,17 @@ Identified by prior investigations only (no invented features):
 - 🟡 Whether `idx_*` indexes existed before the 16 Jul refactor.
 - ❓ Full content of the `E:\GAGAN FINANCE DESK V1\app.py` monolith.
 
+---
+
+## Engineering Principles
+
+Long-term principles observed in this project's documented history:
+
+- **SQLite remains the offline database.** Desktop use runs on `data/finance.db` (WAL mode); nothing about the local path changes based on deployment.
+- **PostgreSQL/Neon remains the cloud backend.** When `DATABASE_URL` is set (Render/cloud), the app uses PostgreSQL via `psycopg2`.
+- **Both backends must always coexist.** A past refactor regressed the PostgreSQL path once; permanent "CRITICAL SHARED INFRASTRUCTURE" guards in `database.py` enforce that neither backend is ever removed — this is the project's #1 architectural rule.
+- **Performance optimizations must preserve identical output.** Every Phase 1/2/Excel-engine change was validated old-vs-new (identical values, identical workbook content, identical behavior), not just faster.
+- **Data integrity has priority over speed.** Examples: `bid_date` canonicalization on every write path, transaction-guarded deletes (April 2024 cleanup), WAL-consistent backups before migrations, and idempotent, backup-first migration scripts.
+- **Backward compatibility is preserved whenever practical.** Existing storage format (`DD-MM-YYYY`), existing templates, existing data files, and existing working pages remain supported; optimizations replaced internals, not interfaces.
+
 *End of TECHNICAL_HISTORY.md*
