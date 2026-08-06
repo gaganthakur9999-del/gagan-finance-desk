@@ -1,14 +1,20 @@
 """
 sync_offline_to_online.py
 Push records from SQLite (offline) → Neon (Render/online).
-Run manually: python sync_offline_to_online.py
+Run manually: python scripts/sync/sync_offline_to_online.py
 """
 import os
 import sys
 import sqlite3
 from datetime import datetime
 
-DB_DIR = "data"
+# Project root = two levels up from this file (scripts/sync/ -> project root)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
+
+from helpers import _normalize_date
+
+DB_DIR = os.path.join(PROJECT_ROOT, "data")
 DB_FILE = os.path.join(DB_DIR, "finance.db")
 
 
@@ -17,8 +23,8 @@ def get_neon_url():
     url = os.environ.get("NEON_URL", "")
     if url:
         return url
-    # Fallback: try loading from .env file
-    env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    # Fallback: try loading from .env file in the project root
+    env_file = os.path.join(PROJECT_ROOT, ".env")
     if os.path.exists(env_file):
         with open(env_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -81,7 +87,7 @@ def insert_online(record):
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (
         sr,
-        record.get("bid_date", ""),
+        _normalize_date(record.get("bid_date", "")),
         record.get("invoice_no", ""),
         record.get("name", ""),
         record.get("xcell", ""),

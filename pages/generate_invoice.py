@@ -27,17 +27,13 @@ import database as db
 def page_generate_invoice():
     app_header()
 
-    # Quick stats
-    all_records = db.load_all_records()
-    today_dt = datetime.now()
-    today_records = [r for r in all_records if _parse_date(r.get("bid_date", "")) and _parse_date(r.get("bid_date", "")).date() == today_dt.date()]
-    today_dp = sum(amount_to_float(r.get("dp_taken", 0)) for r in today_records)
-    today_di = sum(amount_to_float(r.get("di", 0)) for r in today_records)
+    # Quick stats (optimized: targeted SQL aggregate instead of loading all records)
+    today_stats = db.get_today_stats()
     st.markdown(
         f'<div class="quick-stats">'
-        f'<span>📅 Today: <strong>{len(today_records)}</strong> invoices</span>'
-        f'<span>💵 DP: <strong>₹{today_dp:,.2f}</strong></span>'
-        f'<span>💤 DI: <strong>₹{today_di:,.2f}</strong></span>'
+        f'<span>📅 Today: <strong>{today_stats["count"]}</strong> invoices</span>'
+        f'<span>💵 DP: <strong>₹{today_stats["dp"]:,.2f}</strong></span>'
+        f'<span>💤 DI: <strong>₹{today_stats["di"]:,.2f}</strong></span>'
         f'</div>',
         unsafe_allow_html=True,
     )

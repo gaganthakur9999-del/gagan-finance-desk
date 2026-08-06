@@ -84,9 +84,10 @@ def page_emi_notification():
     month1 = base_month
     month2 = add_months(base_month, 1)
 
-    # Build a map: (year, month) -> list of customers ending that month
+    # Build a map: (year, month) -> list of customers ending that month.
+    # Optimized: fetch only the columns the EMI logic needs, pre-filtered in SQL.
     month_map = {}
-    for record in db.load_all_records():
+    for record in db.load_emi_candidates():
         info = compute_emi_info(record)
         if not info:
             continue

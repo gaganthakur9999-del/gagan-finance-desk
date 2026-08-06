@@ -243,6 +243,166 @@ def load_all_records():
         conn.close()
 
 
+def count_records():
+    """Return the total number of records (optimized COUNT(*) instead of loading all rows)."""
+    conn = get_connection()
+    try:
+        cur = _execute(conn, "SELECT COUNT(*) as total FROM records", return_cursor=True)
+        row = _fetchone(cur)
+        return int(row["total"]) if row and row["total"] is not None else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def get_today_stats():
+    """Return today's invoice count and sums (dp_taken, di) with a targeted SQL aggregate.
+
+    Equivalent to the previous Python implementation that filtered load_all_records():
+      - bid_date accepted in DD-MM-YYYY, DD/MM/YYYY, or YYYY-MM-DD (same as _parse_date)
+      - dp_taken / di normalized like amount_to_float (comma-strip + float)
+    Returns dict: {"count": int, "dp": float, "di": float}
+    """
+    today_dt = datetime.now()
+    today_dash = today_dt.strftime("%d-%m-%Y")
+    today_slash = today_dt.strftime("%d/%m/%Y")
+    today_iso = today_dt.strftime("%Y-%m-%d")
+    if USE_POSTGRES:
+        num_expr = "COALESCE(CAST(NULLIF(REPLACE(COALESCE({col}, '0'), ',', ''), '') AS REAL), 0)"
+    else:
+        num_expr = "COALESCE(CAST(REPLACE(COALESCE({col}, '0'), ',', '') AS REAL), 0)"
+    dp_sql = num_expr.format(col="dp_taken")
+    di_sql = num_expr.format(col="di")
+    conn = get_connection()
+    try:
+        cur = _execute(conn,
+            f"SELECT COUNT(*) as total, COALESCE(SUM({dp_sql}),0) as dp, COALESCE(SUM({di_sql}),0) as di "
+            "FROM records WHERE bid_date IN (?,?,?)",
+            (today_dash, today_slash, today_iso), return_cursor=True)
+        row = _fetchone(cur) or {}
+        return {
+            "count": int(row.get("total") or 0),
+            "dp": float(row.get("dp") or 0),
+            "di": float(row.get("di") or 0),
+        }
+    except Exception:
+        return {"count": 0, "dp": 0.0, "di": 0.0}
+    finally:
+        conn.close()
+
+
+def get_db_fingerprint():
+    """Return a tuple that changes whenever the SQLite database file changes
+    (including WAL/SHM sidecars). Used to invalidate derived artifacts (e.g. the
+    exported Excel workbook) cached across Streamlit reruns."""
+    parts = []
+    for path in (DB_FILE, DB_FILE + "-wal", DB_FILE + "-shm"):
+        try:
+            parts.append((os.path.getmtime(path), os.path.getsize(path)))
+        except OSError:
+            parts.append((0, 0))
+    return tuple(parts)
+
+
+def get_latest_invoice_yy_code():
+    """Return the highest YYMM prefix among all-digit invoice numbers
+    (same set as re.match(r'^(\\d{4})\\d+$', ...)), or '' if none.
+
+    Optimized replacement for scanning the whole table in
+    suggest_next_invoice(): reads at most a handful of rows.
+    """
+    conn = get_connection()
+    try:
+        digits_cond = (
+            "invoice_no ~ '^[0-9]{4}[0-9]+$'"
+            if USE_POSTGRES
+            else "invoice_no GLOB '[0-9][0-9][0-9][0-9][0-9]*' AND invoice_no NOT GLOB '*[^0-9]*'"
+        )
+        cur = _execute(conn,
+            f"SELECT COALESCE(MAX(SUBSTR(invoice_no,1,4)), '') AS code "
+            f"FROM records WHERE {digits_cond}",
+            return_cursor=True)
+        row = _fetchone(cur)
+        return str(row["code"] or "") if row else ""
+    except Exception:
+        return ""
+    finally:
+        conn.close()
+
+
+def get_max_invoice_counter(ym_code):
+    """Return the highest trailing counter among invoice numbers that start with
+    ym_code followed by digits (same set as re.match(rf'^{ym_code}\\d+$', ...)),
+    or 0 if none."""
+    conn = get_connection()
+    try:
+        digits_cond = (
+            "invoice_no ~ '^[0-9]{4}[0-9]+$'"
+            if USE_POSTGRES
+            else "invoice_no GLOB '[0-9][0-9][0-9][0-9][0-9]*' AND invoice_no NOT GLOB '*[^0-9]*'"
+        )
+        cur = _execute(conn,
+            f"SELECT COALESCE(MAX(CAST(SUBSTR(invoice_no,5) AS INTEGER)), 0) AS n "
+            f"FROM records WHERE SUBSTR(invoice_no,1,4)=? AND {digits_cond}",
+            (ym_code,), return_cursor=True)
+        row = _fetchone(cur)
+        return int(row["n"] or 0) if row else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def get_recent_invoices(limit=10):
+    """Return up to `limit` invoice numbers from the newest records (ORDER BY id DESC),
+    excluding empty invoice numbers (matches the previous 
+    [r.get("invoice_no","") for r in load_all_records()[:10] if r.get("invoice_no","")]).
+    Fetches only the invoice_no column instead of the whole table."""
+    conn = get_connection()
+    try:
+        cur = _execute(conn,
+            "SELECT invoice_no FROM records WHERE invoice_no != '' ORDER BY id DESC LIMIT ?",
+            (limit,), return_cursor=True)
+        return [r["invoice_no"] for r in _fetchall(cur)]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def get_record_id_by_month_srno(month, sr_no):
+    """Return the record with the given (month, sr_no) as a dict, or None.
+    Matches the previous Python search over load_all_records() (id DESC first)."""
+    conn = get_connection()
+    try:
+        cur = _execute(conn,
+            "SELECT id FROM records WHERE month=? AND sr_no=? ORDER BY id DESC LIMIT 1",
+            (month, sr_no), return_cursor=True)
+        return _fetchone(cur)
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def load_emi_candidates():
+    """Fetch only the columns needed by the EMI calculator, pre-filtered in SQL
+    to records that have a slash-scheme and a bid_date (excludes rows the Python
+    EMI logic would reject anyway)."""
+    conn = get_connection()
+    try:
+        cur = _execute(conn,
+            "SELECT name, phone, alt_phone, bid_date, product, actual_product, emi, scheme "
+            "FROM records WHERE scheme LIKE '%/%' AND bid_date != ''",
+            return_cursor=True)
+        return _fetchall(cur)
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 def add_record(invoice_no, data, serial_no, xcell, dp_taken, product_given, given_prod_price, alt_phone, remarks=""):
     conn = get_connection()
     try:
@@ -255,6 +415,11 @@ def add_record(invoice_no, data, serial_no, xcell, dp_taken, product_given, give
                     break
                 except ValueError:
                     pass
+        # Normalize bid_date to the canonical DD-MM-YYYY storage format.
+        # This is the single choke point for all app writes (PDF extraction,
+        # manual entry, edit form, Excel import), preventing mixed formats.
+        from helpers import _normalize_date
+        bid_date_out = _normalize_date(bid_str)
         _execute(conn, "BEGIN")
         cur = _execute(conn,
             "SELECT COALESCE(MAX(sr_no),0)+1 as n FROM records WHERE month=?",
@@ -265,7 +430,7 @@ def add_record(invoice_no, data, serial_no, xcell, dp_taken, product_given, give
         if USE_POSTGRES:
             insert_sql = insert_sql.rstrip() + " RETURNING id"
         cur = _execute(conn, insert_sql,
-            (sr_no, data.get("bid_date",""), invoice_no, data.get("name",""), xcell, data.get("product",""), serial_no,
+            (sr_no, bid_date_out, invoice_no, data.get("name",""), xcell, data.get("product",""), serial_no,
              _to_float(data.get("price",0)), _to_float(data.get("emi",0)), _to_float(data.get("di",0)), data.get("bid",""),
              _to_float(dp_taken), data.get("scheme",""), product_given, _to_float(given_prod_price), data.get("mobile",""), alt_phone, month, remarks),
             return_cursor=True)
@@ -292,9 +457,12 @@ def update_record(record_id, invoice_no, data, serial_no, xcell, dp_taken, produ
                     break
                 except ValueError:
                     pass
+        # Normalize bid_date to the canonical DD-MM-YYYY storage format (same as add_record).
+        from helpers import _normalize_date
+        bid_date_out = _normalize_date(bid_str)
         _execute(conn,
             "UPDATE records SET bid_date=?,invoice_no=?,name=?,xcell=?,product=?,serial_no=?,price=?,emi=?,di=?,bid=?,dp_taken=?,scheme=?,actual_product=?,given_prod_price=?,phone=?,alt_phone=?,month=?,remarks=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (data.get("bid_date",""), invoice_no, data.get("name",""), xcell, data.get("product",""), serial_no,
+            (bid_date_out, invoice_no, data.get("name",""), xcell, data.get("product",""), serial_no,
              _to_float(data.get("price",0)), _to_float(data.get("emi",0)), _to_float(data.get("di",0)), data.get("bid",""),
              _to_float(dp_taken), data.get("scheme",""), product_given, _to_float(given_prod_price), data.get("mobile",""), alt_phone, month, remarks, record_id))
         _commit(conn)
@@ -366,7 +534,7 @@ def get_available_months():
     return sorted(months, key=lambda m: (-month_sort_key(m)[0], -month_sort_key(m)[1]))
 
 
-def get_dashboard_stats(month=""):
+def get_dashboard_stats(month="", include_monthly_counts=True):
     conn = get_connection()
     try:
         mf, p = "", []
@@ -380,8 +548,10 @@ def get_dashboard_stats(month=""):
             f"SELECT COUNT(*) as total_records, COALESCE(SUM(dp_taken),0) as total_dp, COALESCE(SUM(di),0) as total_di, SUM({xcell_sql}) as total_xcell FROM records {mf}",
             tuple(p) if p else None, return_cursor=True)
         s = _fetchone(cur) or {}
-        cur = _execute(conn, "SELECT month, COUNT(*) as c FROM records GROUP BY month", return_cursor=True)
-        s["monthly_counts"] = {r["month"]: r["c"] for r in _fetchall(cur)}
+        s["monthly_counts"] = {}
+        if include_monthly_counts:
+            cur = _execute(conn, "SELECT month, COUNT(*) as c FROM records GROUP BY month", return_cursor=True)
+            s["monthly_counts"] = {r["month"]: r["c"] for r in _fetchall(cur)}
         s["daily_counts"] = {}
         if month:
             cur = _execute(conn,
@@ -391,6 +561,30 @@ def get_dashboard_stats(month=""):
         return s
     except Exception:
         return {}
+    finally:
+        conn.close()
+
+
+def count_search_records(query="", month=""):
+    """Return the number of records matching the given query/month filters.
+    Lightweight COUNT-only variant used by the Records-page caption area.
+    Identical filter logic to search_records()'s WHERE construction."""
+    conn = get_connection()
+    try:
+        conds, params = [], []
+        if query:
+            q = f"%{query.strip()}%"
+            conds.append("(name LIKE ? OR phone LIKE ? OR invoice_no LIKE ? OR bid LIKE ? OR product LIKE ? OR serial_no LIKE ?)")
+            params.extend([q]*6)
+        if month:
+            conds.append("month=?")
+            params.append(month)
+        w = " AND ".join(conds) if conds else "1=1"
+        cur = _execute(conn, f"SELECT COUNT(*) as t FROM records WHERE {w}", tuple(params), return_cursor=True)
+        row = _fetchone(cur)
+        return int(row["t"]) if row and row["t"] is not None else 0
+    except Exception:
+        return 0
     finally:
         conn.close()
 

@@ -30,7 +30,12 @@ def page_dashboard():
         index=default_idx,
     )
     month_param = selected_month if selected_month != "ALL_MONTHS" else ""
-    stats = db.get_dashboard_stats(month=month_param)
+    # When a specific month is selected, the monthly GROUP BY isn't displayed,
+    # so avoid computing it (saves a full group-by scan on every rerun).
+    stats = db.get_dashboard_stats(
+        month=month_param,
+        include_monthly_counts=(selected_month == "ALL_MONTHS"),
+    )
     c1, c2, c3 = st.columns(3)
     c1.metric("📋 Total Records", f"{stats.get('total_records', 0):,}")
     c2.metric("💵 Total DP", f"₹{stats.get('total_dp', 0):,.2f}")

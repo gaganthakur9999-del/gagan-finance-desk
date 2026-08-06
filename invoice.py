@@ -66,19 +66,17 @@ def suggest_next_invoice():
 
     The counter has a minimum of 2 digits but no upper limit, so
     260799 -> 2607100 (month code preserved).
+
+    Optimized: uses two scalar SQL queries instead of loading the
+    whole records table, producing the exact same number.
     """
     today_code = _current_ym_code()
-    records = db.load_all_records()
-    latest_code = _latest_ym_code_from_records(records)
+    # Highest YYMM prefix across all-digit invoice numbers (scalar query).
+    latest_code = db.get_latest_invoice_yy_code()
     # Use the later of (today's calendar code, latest code in records)
     ym_code = latest_code if latest_code > today_code else today_code
-    matching = [
-        str(r.get("invoice_no") or "") for r in records
-        if re.match(rf"^{ym_code}\d+$", str(r.get("invoice_no") or ""))
-    ]
-    if not matching:
-        return f"{ym_code}01"
-    highest_counter = max(invoice_sort_key(inv) for inv in matching)
+    # Max trailing counter for ym_code (scalar query). 0 when none exist.
+    highest_counter = db.get_max_invoice_counter(ym_code)
     counter = highest_counter + 1
     if counter < 10:
         return f"{ym_code}0{counter}"

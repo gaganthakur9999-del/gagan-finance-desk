@@ -91,7 +91,9 @@ def _show_month_cards():
         cols = st.columns(len(batch))
         for j, month_key in enumerate(batch):
             with cols[j]:
-                stats = db.get_dashboard_stats(month=month_key)
+                # Month cards only need that month's totals; skip the global
+                # GROUP BY month scan (it is identical for all 4 cards).
+                stats = db.get_dashboard_stats(month=month_key, include_monthly_counts=False)
                 rec_count = stats.get("total_records", 0)
                 total_di = stats.get("total_di", 0)
                 # Format month name

@@ -7,6 +7,15 @@ config/settings.json
 
 # Database (local only - cloud uses PostgreSQL)
 data/finance.db
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.db-wal
+data/*.db-shm
+data/*.sql
+data/*.json
+Excel/ALL_RECORDS.xlsx
+*.log
 
 # Python
 __pycache__/

@@ -8,7 +8,7 @@ from datetime import datetime
 import streamlit as st
 
 from config import save_settings, settings
-from helpers import log_activity
+from helpers import _normalize_date, log_activity
 from ui_components import app_header
 import database as db
 
@@ -71,7 +71,7 @@ def _sync_now():
                     phone,alt_phone,month,remarks)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
-                sr, rec.get("bid_date", ""), rec.get("invoice_no", ""), rec.get("name", ""),
+                sr, _normalize_date(rec.get("bid_date", "")), rec.get("invoice_no", ""), rec.get("name", ""),
                 rec.get("xcell", ""), rec.get("product", ""), rec.get("serial_no", ""),
                 float(rec.get("price", 0) or 0), float(rec.get("emi", 0) or 0), float(rec.get("di", 0) or 0),
                 rec.get("bid", ""), float(rec.get("dp_taken", 0) or 0), rec.get("scheme", ""),
@@ -168,7 +168,7 @@ def page_settings():
     st.write(f"Database: {'✅ Found' if db_exists else '❌ Not Found'}")
     if db_exists:
         try:
-            record_count = len(db.load_all_records())
+            record_count = db.count_records()
             st.caption(f"Total records: {record_count}")
         except (sqlite3.Error, OSError) as e:
             st.caption(f"Error: {str(e)}")

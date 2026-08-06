@@ -7,12 +7,13 @@ import sys
 import openpyxl
 from datetime import datetime
 
-# Add current directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Project root = two levels up from this file (scripts/import -> project root)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 import database as db
 
-EXCEL_FILE = "Excel/ALL_RECORDS.xlsx"
+EXCEL_FILE = os.path.join(PROJECT_ROOT, "Excel", "ALL_RECORDS.xlsx")
 
 def import_excel_to_db():
     """Import all records from Excel to SQLite database."""
