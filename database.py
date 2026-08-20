@@ -19,14 +19,17 @@ BEFORE COMMITTING ANY CHANGE TO THIS FILE, VERIFY:
 """
 import json
 import logging
+import functools
 import os
 import sqlite3
+import threading
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 DB_DIR = "data"
-DB_FILE = os.path.join(DB_DIR, "finance.db")
+DB_FILE = os.environ.get("FINANCE_DB_PATH", os.path.join(DB_DIR, "finance.db"))
+os.makedirs(os.path.dirname(DB_FILE) or ".", exist_ok=True)
 os.makedirs(DB_DIR, exist_ok=True)
 
 # DATABASE_URL: Render sets this to the Neon (PostgreSQL) connection string.
@@ -40,10 +43,61 @@ USE_POSTGRES = bool(DATABASE_URL)
 if USE_POSTGRES:
     import psycopg2
     import psycopg2.extras
+    import psycopg2.pool as pg_pool
 
-_cache: Dict[str, Any] = {}
-_cache_time: float = 0
+
+# ---------------------------------------------------------------------------
+# PERFORMANCE INFRASTRUCTURE
+# ---------------------------------------------------------------------------
+# Read-only query results are cached with st.cache_data (short TTL) when this
+# module is imported inside a running Streamlit script. Outside a Streamlit
+# runtime (CLI scripts, tests) the cache decorators below are no-ops so behavior
+# is identical. Writes are NEVER cached - invalidate_cache() is called after
+# every write so the next read always sees fresh data.
 _CACHE_TTL = 30
+
+
+def _resolve_impl(fn, ttl):
+    """Return (and cache) the streamlit-cached or plain implementation."""
+    try:
+        import streamlit as _streamlit
+        if getattr(_streamlit, "runtime", None) and _streamlit.runtime.exists():
+            return _streamlit.cache_data(ttl=ttl)(fn)
+    except Exception:
+        pass
+    return fn
+
+
+def _cache_data(ttl=_CACHE_TTL):
+    """Decorate a read-only query so results are cached with st.cache_data when
+    inside a Streamlit runtime. Resolution happens on the FIRST CALL so CLI
+    scripts and tests never import streamlit or pay any caching cost."""
+    def _decorator(fn):
+        @functools.wraps(fn)
+        def _wrapper(*args, **kwargs):
+            if not hasattr(_wrapper, "_impl"):
+                _wrapper._impl = _resolve_impl(fn, ttl)
+            return _wrapper._impl(*args, **kwargs)
+        return _wrapper
+    return _decorator
+
+
+# Optional, low-noise timing instrumentation. Enable with PERF_DEBUG=1.
+_PERF_DEBUG = os.environ.get("PERF_DEBUG", "").strip().lower() in ("1", "true", "yes")
+_PERF_LOGGER = logging.getLogger("gagan.perf")
+
+
+def _perf_log(message: str) -> None:
+    if _PERF_DEBUG:
+        _PERF_LOGGER.info(message)
+
+
+# PostgreSQL connection pool - lazily created once per process on the first
+# database touch. NEVER created at import time and NEVER per rerun.
+_PG_POOL_MINCONN = 1
+_PG_POOL_MAXCONN = 10
+_pg_pool = None
+_pg_pool_lock = threading.Lock()
 
 
 # DUAL-BACKEND HELPERS ARE CRITICAL SHARED INFRASTRUCTURE.
@@ -61,20 +115,26 @@ def _fix_sql(sql: str) -> str:
 def _execute(conn, sql: str, params: tuple = None, return_cursor: bool = False):
     """Execute SQL with proper parameter style for the database type."""
     sql = _fix_sql(sql)
-    if USE_POSTGRES:
-        cur = conn.cursor()
-        if params:
-            cur.execute(sql, params)
+    t0 = time.perf_counter() if _PERF_DEBUG else None
+    try:
+        if USE_POSTGRES:
+            cur = conn.cursor()
+            if params:
+                cur.execute(sql, params)
+            else:
+                cur.execute(sql)
+            if return_cursor:
+                return cur
+            cur.close()
+            return conn
         else:
-            cur.execute(sql)
-        if return_cursor:
-            return cur
-        cur.close()
-        return conn
-    else:
-        if params:
-            return conn.execute(sql, params)
-        return conn.execute(sql)
+            if params:
+                return conn.execute(sql, params)
+            return conn.execute(sql)
+    finally:
+        if _PERF_DEBUG and t0 is not None:
+            _perf_log(f"{(time.perf_counter() - t0) * 1000:6.1f} ms  "
+                      f"{sql.strip().splitlines()[0][:70] if sql.strip() else ''}")
 
 
 # CRITICAL SHARED INFRASTRUCTURE - dual-backend fetch. Do not remove.
@@ -135,15 +195,146 @@ def _executescript(conn, script: str):
         conn.executescript(script)
 
 
+_db_initialized = False
+
+
+def _ensure_db_initialized():
+    """Run schema/safe-index initialization exactly once, lazily, on the first
+    database access. Never at import time, never per rerun. Retries on failure
+    so a transient outage does not permanently disable schema setup."""
+    global _db_initialized
+    if _db_initialized:
+        return
+    _db_initialized = True  # guard BEFORE init so init_db()->get_connection() does not recurse
+    try:
+        init_db()
+    except Exception:
+        _db_initialized = False
+        raise
+
+
+class _PooledConnection:
+    """Thin adapter around a psycopg2 connection obtained from the lazy pool.
+
+    Preserves the codebase-wide ``conn = get_connection(); ... conn.close()``
+    pattern: close() returns the connection to the pool (or really closes a
+    direct fallback connection). Safety guarantees:
+      - close() is idempotent and never destroys a reusable pooled connection.
+      - psycopg2's putconn() rolls back any open/aborted transaction and
+        discards connections whose server side is gone (e.g. Neon idle
+        timeouts), so broken connections are never re-pooled and no transaction
+        leaks across requests.
+      - cursors remain explicitly closed by callers exactly as before.
+    """
+
+    __slots__ = ("_pool", "_conn", "_closed")
+
+    def __init__(self, pool, conn):
+        self._pool = pool
+        self._conn = conn
+        self._closed = False
+
+    @property
+    def autocommit(self):
+        return self._conn.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value):
+        self._conn.autocommit = value
+
+    @property
+    def closed(self):
+        return self._conn.closed
+
+    @property
+    def info(self):
+        return self._conn.info
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        conn = self._conn
+        pool = self._pool
+        if conn.closed:
+            return  # already dead - nothing to hand back
+        if pool is None:
+            conn.close()
+            return
+        try:
+            pool.putconn(conn)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _create_pg_pool():
+    """Create the psycopg2 ThreadedConnectionPool (lazy, at most once)."""
+    return pg_pool.ThreadedConnectionPool(_PG_POOL_MINCONN, _PG_POOL_MAXCONN, DATABASE_URL)
+
+
+def _get_pool():
+    """Lazily create the reusable PostgreSQL connection pool.
+
+    Inside a Streamlit runtime the pool is registered with st.cache_resource (an
+    explicitly long-lived resource). CLI scripts fall back to a process-wide
+    singleton. Never created at import time and never per rerun."""
+    global _pg_pool
+    if _pg_pool is not None:
+        return _pg_pool
+    try:
+        import streamlit as _streamlit
+        if getattr(_streamlit, "runtime", None) and _streamlit.runtime.exists():
+            _pg_pool = _streamlit.cache_resource(_create_pg_pool)()
+            return _pg_pool
+    except Exception:
+        pass
+    with _pg_pool_lock:
+        if _pg_pool is None:
+            _pg_pool = _create_pg_pool()
+    return _pg_pool
+
+
+def _get_postgres_connection():
+    """Get a PostgreSQL connection from the pool (no fresh TCP connect per
+    operation). Falls back to a direct connection if the pool is momentarily
+    exhausted so a concurrency spike cannot break the app."""
+    t0 = time.perf_counter() if _PERF_DEBUG else None
+    try:
+        raw = _get_pool().getconn()
+    except pg_pool.PoolError:
+        _perf_log("pool exhausted - using direct connection")
+        raw = psycopg2.connect(DATABASE_URL)
+        return _PooledConnection(None, raw)
+    raw.autocommit = False
+    if _PERF_DEBUG and t0 is not None:
+        _perf_log(f"pool.getconn {(time.perf_counter() - t0) * 1000:.1f} ms")
+    return _PooledConnection(_get_pool(), raw)
+
+
 # CRITICAL SHARED INFRASTRUCTURE - decides the backend.
 # Returns PostgreSQL when DATABASE_URL is present (Render), else SQLite (desktop).
 # Both backends MUST stay. Do not remove either branch.
 def get_connection():
-    """If DATABASE_URL is set returns PostgreSQL, else SQLite (WAL)."""
+    """If DATABASE_URL is set returns a pooled PostgreSQL connection, else SQLite (WAL)."""
+    if not _db_initialized:
+        _ensure_db_initialized()
     if USE_POSTGRES:
-        conn = psycopg2.connect(DATABASE_URL)
-        conn.autocommit = False
-        return conn
+        return _get_postgres_connection()
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -225,12 +416,23 @@ def migrate_dates():
         conn.close()
 
 
-migrate_dates()
-init_db()
+# NOTE: Database initialization is now LAZY (runs on first get_connection()).
+# migrate_dates() is OPT-IN only - it never runs automatically at startup and
+# therefore never scans the records table unless explicitly called.
 
 
 def invalidate_cache():
-    global _cache, _cache_time; _cache = {}; _cache_time = 0
+    """Centralized read-cache invalidation - called after every write
+    (insert/update/delete/swap/restore/sync) so the next read is never stale.
+
+    Clears the Streamlit read-result cache when inside a runtime; safe no-op
+    elsewhere."""
+    try:
+        import streamlit as _streamlit
+        if getattr(_streamlit, "runtime", None) and _streamlit.runtime.exists():
+            _streamlit.cache_data.clear()
+    except Exception:
+        pass
 
 
 def load_all_records():
@@ -256,6 +458,7 @@ def count_records():
         conn.close()
 
 
+@_cache_data(_CACHE_TTL)
 def get_today_stats():
     """Return today's invoice count and sums (dp_taken, di) with a targeted SQL aggregate.
 
@@ -293,9 +496,27 @@ def get_today_stats():
 
 
 def get_db_fingerprint():
-    """Return a tuple that changes whenever the SQLite database file changes
-    (including WAL/SHM sidecars). Used to invalidate derived artifacts (e.g. the
-    exported Excel workbook) cached across Streamlit reruns."""
+    """Return a tuple that changes whenever the records table changes.
+
+    SQLite: database file mtimes (including WAL/SHM sidecars).
+    PostgreSQL: one cheap aggregate query (count, max id, max updated_at).
+    Used to invalidate derived artifacts (e.g. the exported Excel workbook)
+    cached across Streamlit reruns on both backends."""
+    if USE_POSTGRES:
+        conn = get_connection()
+        try:
+            cur = _execute(
+                conn,
+                "SELECT COUNT(*) as cnt, COALESCE(MAX(id),0) as max_id, "
+                "COALESCE(MAX(updated_at),'') as max_updated FROM records",
+                return_cursor=True,
+            )
+            row = _fetchone(cur) or {}
+            return (int(row.get("cnt") or 0), int(row.get("max_id") or 0), str(row.get("max_updated") or ""))
+        except Exception:
+            return (0, 0, "")
+        finally:
+            conn.close()
     parts = []
     for path in (DB_FILE, DB_FILE + "-wal", DB_FILE + "-shm"):
         try:
@@ -354,6 +575,7 @@ def get_max_invoice_counter(ym_code):
         conn.close()
 
 
+@_cache_data(_CACHE_TTL)
 def get_recent_invoices(limit=10):
     """Return up to `limit` invoice numbers from the newest records (ORDER BY id DESC),
     excluding empty invoice numbers (matches the previous 
@@ -386,6 +608,7 @@ def get_record_id_by_month_srno(month, sr_no):
         conn.close()
 
 
+@_cache_data(_CACHE_TTL)
 def load_emi_candidates():
     """Fetch only the columns needed by the EMI calculator, pre-filtered in SQL
     to records that have a slash-scheme and a bid_date (excludes rows the Python
@@ -517,6 +740,7 @@ def month_sort_key(month):
         return (9999, 99)
 
 
+@_cache_data(_CACHE_TTL)
 def get_available_months():
     """Return months newest-first - always includes the current month so a new
     month's sheet appears automatically even with zero records."""
@@ -534,6 +758,7 @@ def get_available_months():
     return sorted(months, key=lambda m: (-month_sort_key(m)[0], -month_sort_key(m)[1]))
 
 
+@_cache_data(_CACHE_TTL)
 def get_dashboard_stats(month="", include_monthly_counts=True):
     conn = get_connection()
     try:
@@ -559,6 +784,42 @@ def get_dashboard_stats(month="", include_monthly_counts=True):
                 (month,), return_cursor=True)
             s["daily_counts"] = {r["bid_date"]: r["c"] for r in _fetchall(cur)}
         return s
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+
+def get_monthly_card_stats():
+    """Return {month: {total_records, total_dp, total_di, total_xcell}} for every
+    month in ONE grouped query.
+
+    Produces exactly the same numbers as N separate get_dashboard_stats(month=X)
+    calls (identical SQL aggregate expressions), so the Generate Invoice monthly
+    cards render identically with a single database round trip instead of up to 4."""
+    conn = get_connection()
+    try:
+        if USE_POSTGRES:
+            xcell_sql = "COALESCE(CAST(NULLIF(REPLACE(COALESCE(xcell, '0'), ',', ''), '') AS REAL), 0)"
+        else:
+            xcell_sql = "COALESCE(CAST(REPLACE(COALESCE(xcell, '0'), ',', '') AS REAL), 0)"
+        cur = _execute(
+            conn,
+            "SELECT month, COUNT(*) as total_records, COALESCE(SUM(dp_taken),0) as total_dp, "
+            "COALESCE(SUM(di),0) as total_di, "
+            f"SUM({xcell_sql}) as total_xcell "
+            "FROM records GROUP BY month",
+            return_cursor=True,
+        )
+        out = {}
+        for r in _fetchall(cur):
+            out[r["month"]] = {
+                "total_records": int(r["total_records"] or 0),
+                "total_dp": float(r["total_dp"] or 0),
+                "total_di": float(r["total_di"] or 0),
+                "total_xcell": float(r["total_xcell"] or 0),
+            }
+        return out
     except Exception:
         return {}
     finally:

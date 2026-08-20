@@ -306,12 +306,12 @@ Identified by prior investigations only (no invented features):
 1. **Excel incremental update engine (Phase 3B candidate)** — update only the affected month sheet (or append changed rows) instead of full rebuild; save remains the ceiling, so also consider deferring full rebuilds. (From Phase 3A investigation; Option A/B/C/D evaluated, not implemented.)
 2. **Search optimization (FTS5)** — SQLite FTS5 verified available; replace 6-column OR-LIKE with tokenized search (sub-ms @1M). (From Phase 2 report; not implemented.)
 3. **`LOWER()` index optimization** — NOCASE/expression index for `invoice_no`/`serial_no` checks (or case-consistent writes). (From Phase 2 report; not implemented.)
-4. **Batch Neon synchronization** — single connection + `executemany`/transaction for `_sync_now()` instead of per-record connect/commit. (From Phase 2 report; not implemented.)
+4. **Batch Neon synchronization** - ✅ Implemented in Phase 3 (20 Aug 2026): `pages/settings.py` `_sync_now()` uses one connection + `executemany` in one transaction.
 5. **Precomputed monthly summary table** — maintain counts/sums per month/day on write to keep dashboard/statistics O(1) at 500K+. (From Phase 2 roadmap; not implemented.)
-6. **Activate the existing `_cache` (or Streamlit `@st.cache_data`)** — the `_cache`/`_CACHE_TTL=30` globals are currently dead code; nothing reads/writes them. (From Phase 1 audit; not implemented.)
+6. **Streamlit read caching** - ✅ Implemented in Phase 3 (20 Aug 2026): `st.cache_data(ttl=30)` on read-only queries with centralized `invalidate_cache()` after every write (dead `_cache` globals removed).
 7. **Cap `save_backup()` growth** — keep N most-recent backups per invoice (or JSONL archive). (From Phase 2 roadmap; not implemented.)
 8. **Canonical ISO `YYYY-MM-DD` storage for `bid_date`** — recommended in the date investigation (natural sorting/indexing, removes `substr()` hacks); requires the documented `migrate_dates()` extension. (From date-format investigation; not implemented — current canonical storage is `DD-MM-YYYY`.)
-9. **Connection reuse** — `@st.cache_resource` for the shared SQLite connection (minor; ~0.1–0.5 ms per open). (From Phase 1 audit; not implemented.)
+9. **Connection reuse (PostgreSQL)** - ✅ Implemented in Phase 3 (20 Aug 2026): lazy `ThreadedConnectionPool` for Neon instead of per-operation `psycopg2.connect()`. SQLite intentionally keeps normal connections (open is ~0.4 ms locally).
 
 ---
 
@@ -321,6 +321,43 @@ Identified by prior investigations only (no invented features):
 - **`bid_date` storage = DD-MM-YYYY** (write-path normalized; display unchanged).
 - **Hot page paths avoid full-table loads** (Phase 1/2 verified identical outputs).
 - **Workbook appearance stable** across export refactors (validated cell-for-cell).
+
+---
+
+## Performance Phase 3 - connection pooling & startup optimization (2026-08-20)
+
+**Architecture (PostgreSQL/Neon):**
+- Lazy `psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10)` created on the first database touch (never at import, never per rerun); registered with `st.cache_resource` inside the Streamlit runtime, process-wide singleton for CLI scripts.
+- `_PooledConnection` adapter preserves the codebase-wide `conn = get_connection(); ... conn.close()` pattern - `close()` hands the connection back to the pool; psycopg2's `putconn()` rolls back open/aborted transactions and discards connections whose server side is gone (Neon idle timeouts); pool exhaustion falls back to a direct connection.
+- SQLite backend unchanged (normal `sqlite3` connections + WAL; open ~0.4 ms locally).
+
+**Startup (both backends):**
+- `init_db()` now runs lazily once on first `get_connection()` (recursion-safe; retries on failure); `migrate_dates()` is opt-in only. Zero schema work / zero records scans at import.
+- `FINANCE_DB_PATH` env override for isolated tests.
+
+**Caching:**
+- `st.cache_data(ttl=30)` on `get_available_months`, `get_today_stats`, `get_dashboard_stats`, `get_recent_invoices`, `load_emi_candidates`, `get_monthly_card_stats` - resolved lazily at first call (CLI scripts/tests never import streamlit).
+- `invalidate_cache()` (centralized) clears `st.cache_data` after every insert/update/delete/swap/restore/sync - the next read is always fresh.
+- Records page Excel download cached via `st.cache_data(ttl=3600)` keyed by `get_db_fingerprint()` (SQLite: file mtimes; PostgreSQL: `(COUNT(*), MAX(id), MAX(updated_at))`).
+
+**Round-trip reductions (Neon):**
+- One grouped `get_monthly_card_stats()` replaces up to 4 per-month queries on the Generate Invoice cards.
+- Records page reuses the `total` returned by `search_records()` (duplicate `count_search_records()` removed).
+- Settings Sync Now batched to one connection + `executemany`.
+- `suggest_next_invoice()` no longer runs on every rerun (eager-default fix + session-state guard in the manual-entry form).
+
+**Measured locally (SQLite, 1,425 rows):**
+- `database` import: ~95-231 ms -> ~53 ms (zero connections at import).
+- `ui_components` import chain: ~2,032 ms -> ~7 ms; `pages.dashboard` import ~1 ms with no heavy modules.
+- AppTest: all 5 pages pass; Generate Invoice second render ~50 ms.
+- Neon latency itself was not measurable from this machine; the pool/grouped-query design removes per-operation network connects.
+
+**Not implemented (per project decision):**
+- `idx_records_month_srno ON records(month, sr_no)` is **documented only** - NOT added to `init_db()` and NOT run against production. If desired, run manually on both backends:
+  ```sql
+  CREATE INDEX IF NOT EXISTS idx_records_month_srno ON records(month, sr_no);
+  ```
+  (Valid SQLite + PostgreSQL; helpful for month-scoped `MAX(sr_no)`, renumbering, and move lookups.)
 
 ---
 

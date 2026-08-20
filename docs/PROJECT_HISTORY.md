@@ -168,6 +168,12 @@ Late July 2026 — Cross-platform PDF (fpdf2/mammoth+weasyprint), sync scripts, 
 - **Evidence:** Phase 3A investigation profiled `update_excel_file()` — alternating-row styling was 84–92% of export time (1.8M per-cell `Alignment` objects at 100K rows); Option E implemented in `excel_utils.py` (hoisted reusable style objects). Verified: Alignment objects 25,562 → 506; export 2.1× faster; workbook identical except `created`/`modified` metadata timestamps (save-time, inherent to any re-save).
 - **Why important:** The last big per-save latency; makes Excel export O(rows-copy) instead of O(rows × style-objects).
 
+### 19. Performance Phase 3 - Render/Neon connection pooling & startup optimization (20 Aug 2026)
+- **Date:** 20 Aug 2026 ✅
+- **Evidence:** `database.py` lazy `ThreadedConnectionPool` + `_PooledConnection`; lazy `init_db()`; opt-in `migrate_dates()`; `st.cache_data` read caching + centralized `invalidate_cache()`; `get_monthly_card_stats()` grouped query; PostgreSQL fingerprint for the Excel download cache; Records page reuses `search_records()` total; batched Settings sync; lazy page/module imports; eager-eval fixes for `generated_invoice_no` and the manual-entry suggestion. Verified: module import ~53 ms (was ~95-231 ms incl. import-time init/migrate); `ui_components` chain ~2,032 ms to ~7 ms; Dashboard ~1 ms with zero heavy imports; AppTest all 5 pages pass; SQLite functional suite passes; pool wrapper tests pass; PostgreSQL import verified (no connection at import).
+- **Description:** Replaced per-operation `psycopg2.connect()` with a safe lazy pool, removed import-time DB work, cached read-only results with immediate write invalidation, collapsed the monthly cards into one grouped query, and stopped per-rerun Excel rebuilds on Neon.
+- **Why important:** Removes the per-query network connection overhead on Render/Neon (the dominant cloud latency) and cuts desktop import/startup costs without changing UI, invoice, PDF, or Excel behavior.
+
 ---
 
 ## Categorized History

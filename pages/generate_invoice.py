@@ -71,7 +71,14 @@ def page_generate_invoice():
     st.markdown("**Invoice Details**")
     c1, c2, c3 = st.columns([1, 1, 1.15])
     with c1:
-        default_inv = st.session_state.get("generated_invoice_no", suggest_next_invoice())
+        # IMPORTANT: do NOT use st.session_state.get("generated_invoice_no",
+        # suggest_next_invoice()) - Python evaluates default arguments EAGERLY,
+        # so suggest_next_invoice() (2 SQL queries) would run on every rerun even
+        # when the value already exists. Compute it only when it is missing.
+        if "generated_invoice_no" in st.session_state:
+            default_inv = st.session_state.generated_invoice_no
+        else:
+            default_inv = suggest_next_invoice()
         invoice_no = st.text_input("Invoice Number", value=default_inv)
     with c2:
         invoice_date = st.text_input("Invoice Date", value=datetime.now().strftime("%d-%m-%Y"))

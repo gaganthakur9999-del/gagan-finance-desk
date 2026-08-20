@@ -29,7 +29,11 @@ def _get_neon_url():
 
 
 def _sync_now():
-    """Push all local SQLite records to Neon cloud."""
+    """Push all local SQLite records to Neon cloud.
+
+    Batched for performance: one connection + one transaction + executemany
+    instead of a separate Neon connect/commit per record. Dedup key and sr_no
+    assignment logic are unchanged from the previous per-record version."""
     neon_url = _get_neon_url()
     if not neon_url:
         st.error("❌ NEON_URL not configured. Copy .env.example to .env and add your Neon connection string.")
@@ -39,52 +43,59 @@ def _sync_now():
     except ImportError:
         st.error("❌ psycopg2 not installed. Run: pip install psycopg2-binary")
         return
-    try:
-        conn = psycopg2.connect(neon_url)
-        cur = conn.cursor()
-        cur.execute("SELECT invoice_no, serial_no FROM records")
-        online_keys = {(r[0] or "", r[1] or "") for r in cur.fetchall()}
-        cur.close()
-        conn.close()
-    except Exception as e:
-        st.error(f"❌ Failed to connect to Neon: {e}")
-        return
 
     records = db.load_all_records()
     synced = 0
     skipped = 0
     failures = []
-    for rec in records:
-        key = (str(rec.get("invoice_no") or ""), str(rec.get("serial_no") or ""))
-        if key in online_keys:
-            skipped += 1
-            continue
+    try:
+        conn = psycopg2.connect(neon_url)
+        cur = conn.cursor()
         try:
-            conn = psycopg2.connect(neon_url)
-            cur = conn.cursor()
-            month = rec.get("month") or ""
-            cur.execute("SELECT COALESCE(MAX(sr_no),0)+1 FROM records WHERE month=%s", (month,))
-            sr = cur.fetchone()[0]
-            cur.execute("""
-                INSERT INTO records (sr_no,bid_date,invoice_no,name,xcell,product,serial_no,
-                    price,emi,di,bid,dp_taken,scheme,actual_product,given_prod_price,
-                    phone,alt_phone,month,remarks)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """, (
-                sr, _normalize_date(rec.get("bid_date", "")), rec.get("invoice_no", ""), rec.get("name", ""),
-                rec.get("xcell", ""), rec.get("product", ""), rec.get("serial_no", ""),
-                float(rec.get("price", 0) or 0), float(rec.get("emi", 0) or 0), float(rec.get("di", 0) or 0),
-                rec.get("bid", ""), float(rec.get("dp_taken", 0) or 0), rec.get("scheme", ""),
-                rec.get("actual_product", ""), float(rec.get("given_prod_price", 0) or 0),
-                rec.get("phone", ""), rec.get("alt_phone", ""), month, rec.get("remarks", ""),
-            ))
+            cur.execute("SELECT invoice_no, serial_no FROM records")
+            online_keys = {(r[0] or "", r[1] or "") for r in cur.fetchall()}
+            # Precompute the highest sr_no per month once, then increment in
+            # Python - produces the same numbering as the previous per-record
+            # MAX(sr_no) query.
+            cur.execute("SELECT month, MAX(sr_no) FROM records GROUP BY month")
+            month_max = {r[0] or "": int(r[1] or 0) for r in cur.fetchall()}
+            rows = []
+            for rec in records:
+                key = (str(rec.get("invoice_no") or ""), str(rec.get("serial_no") or ""))
+                if key in online_keys:
+                    skipped += 1
+                    continue
+                month = rec.get("month") or ""
+                sr = month_max.get(month, 0) + 1
+                month_max[month] = sr
+                rows.append((
+                    sr, _normalize_date(rec.get("bid_date", "")), rec.get("invoice_no", ""), rec.get("name", ""),
+                    rec.get("xcell", ""), rec.get("product", ""), rec.get("serial_no", ""),
+                    float(rec.get("price", 0) or 0), float(rec.get("emi", 0) or 0), float(rec.get("di", 0) or 0),
+                    rec.get("bid", ""), float(rec.get("dp_taken", 0) or 0), rec.get("scheme", ""),
+                    rec.get("actual_product", ""), float(rec.get("given_prod_price", 0) or 0),
+                    rec.get("phone", ""), rec.get("alt_phone", ""), month, rec.get("remarks", ""),
+                ))
+            if rows:
+                cur.executemany("""
+                    INSERT INTO records (sr_no,bid_date,invoice_no,name,xcell,product,serial_no,
+                        price,emi,di,bid,dp_taken,scheme,actual_product,given_prod_price,
+                        phone,alt_phone,month,remarks)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, rows)
             conn.commit()
+            synced = len(rows)
+        except Exception as e:
+            conn.rollback()
+            failures.append(str(e))
+        finally:
             cur.close()
             conn.close()
-            synced += 1
-        except Exception as e:
-            failures.append(f"{rec.get('invoice_no', '?')} - {e}")
+    except Exception as e:
+        st.error(f"❌ Failed to connect to Neon: {e}")
+        return
 
+    db.invalidate_cache()
     log_activity("SYNC", f"Cloud sync: {synced} synced, {skipped} skipped, {len(failures)} failed")
     st.success(f"✅ Sync complete! {synced} synced, {skipped} skipped, {len(failures)} failed.")
     if failures:

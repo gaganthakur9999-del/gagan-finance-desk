@@ -7,9 +7,7 @@ from datetime import datetime
 import streamlit as st
 
 from config import APP_NAME, settings
-from excel_utils import update_excel_file
 from helpers import log_activity
-from invoice import suggest_next_invoice
 import database as db
 
 
@@ -86,14 +84,16 @@ def _show_month_cards():
         st.info("No records yet. Upload a PDF or use manual entry below.")
         return
     st.markdown("**📊 Monthly Overview**")
+    # One grouped SQL query returns every month's totals - identical values to
+    # calling get_dashboard_stats(month=X) once per card (same SQL aggregate
+    # expressions), with a single database round trip instead of up to 4.
+    card_stats = db.get_monthly_card_stats()
     for i in range(0, len(available), 4):
         batch = available[i:i+4]
         cols = st.columns(len(batch))
         for j, month_key in enumerate(batch):
             with cols[j]:
-                # Month cards only need that month's totals; skip the global
-                # GROUP BY month scan (it is identical for all 4 cards).
-                stats = db.get_dashboard_stats(month=month_key, include_monthly_counts=False)
+                stats = card_stats.get(month_key) or {}
                 rec_count = stats.get("total_records", 0)
                 total_di = stats.get("total_di", 0)
                 # Format month name
@@ -110,6 +110,10 @@ def _show_month_cards():
 
 def _show_manual_entry():
     """Collapsed manual entry form for adding invoices without PDF."""
+    # Imported lazily so collapsed reruns / other pages never pay the
+    # openpyxl/docxtpl import cost unless this form is actually used.
+    from excel_utils import update_excel_file
+    from invoice import suggest_next_invoice
     with st.expander("➕ Add Manually (No PDF)", expanded=False):
         st.markdown("**Customer Details**")
         mc1, mc2, mc3 = st.columns([1.7, 1, 1])
@@ -126,7 +130,11 @@ def _show_manual_entry():
             m_serial = st.text_input("Serial / IMEI", key="manual_serial")
         mc6, mc7, mc8 = st.columns(3)
         with mc6:
-            m_invoice = st.text_input("Invoice No", value=suggest_next_invoice(), key="manual_invoice")
+            # Compute the suggested invoice number only when it is not already in
+            # session state - never on every rerun while the form is collapsed.
+            if "manual_invoice" not in st.session_state:
+                st.session_state.manual_invoice = suggest_next_invoice()
+            m_invoice = st.text_input("Invoice No", key="manual_invoice")
         with mc7:
             m_date = st.text_input("Invoice Date", value=datetime.now().strftime("%d-%m-%Y"), key="manual_date")
         with mc8:

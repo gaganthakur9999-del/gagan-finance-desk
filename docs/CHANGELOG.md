@@ -71,22 +71,37 @@ Describes the verified state that marks the start of change tracking. No version
 
 ## Future Releases
 
-Entries for changes landing **after** the production baseline will be added here. Use the template below for each future release section.
+**Performance Phase 3 - Render/Neon connection pooling & startup optimization (2026-08-20).**
 
 ### Added
-_To be written._
+- **PostgreSQL connection pool** - lazy `ThreadedConnectionPool(1, 10)` created on the first database touch (never at import, never per rerun), registered with `st.cache_resource` inside the Streamlit runtime. A `_PooledConnection` adapter preserves the existing `conn.close()` pattern: `close()` returns the connection to the pool instead of destroying it, rolls back any open/aborted transaction, discards broken/stale (Neon idle-timeout) connections, and falls back to a direct connection if the pool is momentarily exhausted.
+- **Read-result caching** - `st.cache_data(ttl=30)` for read-only queries (`get_available_months`, `get_today_stats`, `get_dashboard_stats`, `get_recent_invoices`, `load_emi_candidates`, `get_monthly_card_stats`), resolved lazily at first call so CLI scripts/tests never import streamlit. Centralized `invalidate_cache()` clears the cache after every write.
+- **`get_monthly_card_stats()`** - one `GROUP BY month` query replaces up to 4 separate per-month queries on the Generate Invoice cards (values verified identical).
+- **PostgreSQL DB fingerprint** - `(COUNT(*), MAX(id), MAX(updated_at))` enables the Excel download cache on Neon (previously rebuilt on every rerun).
+- **`PERF_DEBUG=1`** - optional, low-noise query-duration / pool-acquisition logging (off by default).
+- **`FINANCE_DB_PATH`** env override for the SQLite database path (isolated tests / portable deployments; default unchanged).
 
 ### Changed
-_To be written._
+- `init_db()` is now **lazy** - runs once on the first `get_connection()` instead of at module import (recursion-safe, retries on failure). No import-time schema work.
+- `migrate_dates()` is now **opt-in only** - never runs automatically, so normal startup never scans the records table.
+- Records page reuses the `total` already returned by `search_records()` (duplicate `count_search_records()` call removed).
+- Settings -> Sync Now is **batched**: one Neon connection + one transaction + `executemany` instead of a connect/commit per record (same dedup and `sr_no` logic).
+- Manual-entry form and Generate Invoice compute `suggest_next_invoice()` only when the value is not already in session state.
+- Lazy page/module imports: Dashboard and other pages no longer initialize PDF/DOCX/Excel machinery they do not need.
 
 ### Fixed
-_To be written._
+- Eager evaluation of `st.session_state.get("generated_invoice_no", suggest_next_invoice())` - the default argument ran `suggest_next_invoice()` (2 SQL queries) on every rerun even when the value already existed.
+- PostgreSQL Records page rebuilt the entire Excel workbook on every rerun (now cached by fingerprint).
+- `suggest_next_invoice()` ran on every rerun while the collapsed manual-entry form was open.
 
 ### Performance
-_To be written._
+- `database` module import (no init/migrate at import): ~95-231 ms -> ~53 ms locally; **zero database connections at import**.
+- `ui_components` heavy import chain (openpyxl + docxtpl + num2words + PDF stack): ~2,032 ms -> ~7 ms core chain; Dashboard page imports in ~1 ms with no heavy modules.
+- Generate Invoice page second render (cached): ~50 ms in AppTest.
+- Neon round-trips reduced architecturally: per-operation connection pool, one grouped month query, fingerprint-keyed Excel cache, batched sync, no duplicate COUNT. (Exact Neon latency not measurable locally; all queries verified against SQLite.)
 
 ### Documentation
-_To be written._
+- Updated `docs/CHANGELOG.md`, `docs/FEATURE_HISTORY.md`, `docs/PROJECT_HISTORY.md`, `docs/TECHNICAL_HISTORY.md`.
 
 ### Refactoring
-_To be written._
+- No UI, invoice, PDF, or Excel format changes. Business logic and both database backends (SQLite + PostgreSQL/Neon) preserved.

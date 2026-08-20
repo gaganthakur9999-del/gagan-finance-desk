@@ -51,12 +51,10 @@ logging.getLogger().setLevel(logging.ERROR)
 # =========================
 # PAGE ROUTING
 # =========================
+# Pages are imported LAZILY inside their routing branch so the Dashboard (or any
+# other page) never initializes PDF/DOCX/Excel machinery it does not need.
+# Navigation and behavior are unchanged.
 from ui_components import render_menu
-from pages.dashboard import page_dashboard
-from pages.emi_notification import page_emi_notification
-from pages.generate_invoice import page_generate_invoice
-from pages.records import page_records
-from pages.settings import page_settings
 
 page = render_menu()
 
@@ -64,12 +62,17 @@ if st.session_state.pop("_theme_changed", False):
     st.rerun()
 
 if page == "Generate Invoice":
+    from pages.generate_invoice import page_generate_invoice
     page_generate_invoice()
 elif page == "Records":
+    from pages.records import page_records
     page_records()
 elif page == "Dashboard":
+    from pages.dashboard import page_dashboard
     page_dashboard()
 elif page == "EMI Notification":
+    from pages.emi_notification import page_emi_notification
     page_emi_notification()
 else:
+    from pages.settings import page_settings
     page_settings()

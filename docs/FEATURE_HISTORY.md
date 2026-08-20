@@ -109,9 +109,25 @@
 | Feature | Purpose | Date | Status | Related files |
 |---------|---------|------|--------|---------------|
 | `import_excel.py` bulk Excel → DB importer | Migrate existing records | 23 Jun 2026 ✅ | ✅ Active (manual CLI) | `import_excel.py` |
-| `migrate_dates()` auto date canonicalization | Convert legacy ISO dates to DD-MM-YYYY + fix month column | 16 Jul 2026 🟡 (present by refactor) | ✅ Active (on startup) | `database.migrate_dates` |
+| `migrate_dates()` auto date canonicalization | Convert legacy ISO dates to DD-MM-YYYY + fix month column | 16 Jul 2026 🟡 (present by refactor) | 🟡 Opt-in only (never runs automatically since 20 Aug 2026) | `database.migrate_dates` |
 | `bid_date` write-path normalization (PDF/manual/edit/import/sync) | Never store non-DD-MM-YYYY again | 5 Aug 2026 ✅ | ✅ Active | `database.add_record`/`update_record`, `sync_*.py`, `settings._sync_now` |
 | `migrate_date_format.py` one-time migration | Convert 11 existing DD/MM/YYYY rows | 5 Aug 2026 ✅ | ✅ Retained in repo (idempotent) | `migrate_date_format.py` |
+
+## Performance (Phase 3 - 2026-08-20)
+
+| Feature | Purpose | Date | Status | Related files |
+|---------|---------|------|--------|---------------|
+| PostgreSQL connection pool (lazy `ThreadedConnectionPool`) | Reuse one Neon connection instead of a fresh TCP connect per operation | 20 Aug 2026 ✅ | ✅ Active (Render/Neon) | `database.py` |
+| `st.cache_data` read-result caching (30 s TTL) | Skip repeated read-only queries across reruns | 20 Aug 2026 ✅ | ✅ Active (Streamlit) | `database.py` |
+| Centralized `invalidate_cache()` | Clear cached read results immediately after every write | 20 Aug 2026 ✅ | ✅ Active | `database.py` |
+| Lazy `init_db()` + opt-in `migrate_dates()` | No schema work / records scan at startup | 20 Aug 2026 ✅ | ✅ Active | `database.py` |
+| `get_monthly_card_stats()` grouped query | One round trip for all monthly cards | 20 Aug 2026 ✅ | ✅ Active | `database.py`, `ui_components.py` |
+| PostgreSQL Excel-download fingerprint cache | No full workbook rebuild on every rerun (Neon) | 20 Aug 2026 ✅ | ✅ Active | `pages/records.py`, `database.get_db_fingerprint` |
+| Reuse `search_records()` total (no duplicate COUNT) | One fewer query per Records rerun | 20 Aug 2026 ✅ | ✅ Active | `pages/records.py` |
+| Batched Settings Sync Now (`executemany`) | One connection + transaction instead of one per record | 20 Aug 2026 ✅ | ✅ Active | `pages/settings.py` |
+| Lazy page/module imports | Dashboard no longer loads PDF/DOCX/Excel stack | 20 Aug 2026 ✅ | ✅ Active | `app.py`, `ui_components.py`, `pages/records.py` |
+| Invoice-number / manual-entry lazy evaluation | No SQL when the value already exists | 20 Aug 2026 ✅ | ✅ Active | `pages/generate_invoice.py`, `ui_components.py` |
+| `PERF_DEBUG=1` instrumentation | Optional query/pool timing (off by default) | 20 Aug 2026 ✅ | ✅ Active | `database.py` |
 | Dual-backend protection comments | Never regress PostgreSQL support | 1 Aug 2026 ✅ | ✅ Active (enforced by convention) | `database.py` |
 
 ---
