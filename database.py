@@ -22,6 +22,7 @@ import logging
 import functools
 import os
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime
@@ -89,7 +90,9 @@ _PERF_LOGGER = logging.getLogger("gagan.perf")
 
 def _perf_log(message: str) -> None:
     if _PERF_DEBUG:
-        _PERF_LOGGER.info(message)
+        # The app root logger is set to ERROR level, which would silently drop
+        # INFO messages, so emit directly to stderr for guaranteed visibility.
+        print(message, file=sys.stderr, flush=True)
 
 
 # PostgreSQL connection pool - lazily created once per process on the first
