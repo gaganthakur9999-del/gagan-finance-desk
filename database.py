@@ -895,13 +895,15 @@ def search_records(query="", name_filter="", phone_filter="", date_from="", date
             sort_by = "id"
         ordr = "DESC" if sort_desc else "ASC"
         se = sort_by
+        order_sql = f"{se} {ordr}"
         if sort_by == "bid_date":
-            se = "substr(bid_date,7,4)||'-'||substr(bid_date,4,2)||'-'||substr(bid_date,1,2), sr_no"
+            se = "substr(bid_date,7,4)||'-'||substr(bid_date,4,2)||'-'||substr(bid_date,1,2)"
+            order_sql = f"{se} {ordr}, sr_no {ordr}"
         cur = _execute(conn, f"SELECT COUNT(*) as t FROM records WHERE {w}", tuple(params), return_cursor=True)
         total = _fetchone(cur)["t"]
         off = (page-1)*page_size
         cur = _execute(conn,
-            f"SELECT * FROM records WHERE {w} ORDER BY {se} {ordr} LIMIT ? OFFSET ?",
+            f"SELECT * FROM records WHERE {w} ORDER BY {order_sql} LIMIT ? OFFSET ?",
             tuple(params) + (page_size, off), return_cursor=True)
         recs = _fetchall(cur)
         return recs, total
