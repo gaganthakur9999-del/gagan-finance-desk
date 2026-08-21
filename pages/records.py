@@ -103,7 +103,8 @@ def page_records():
     with sc1:
         sort_by = st.selectbox("Sort by",
             ["id", "bid_date", "invoice_no", "name", "price", "dp_taken", "di", "month", "created_at"],
-            format_func=lambda x: {"id": "Default (Newest First)", "bid_date": "BID Date",
+            index=1,
+            format_func=lambda x: {"id": "Insertion Order", "bid_date": "Default (Newest First)",
                 "invoice_no": "Invoice No", "name": "Name", "price": "Price",
                 "dp_taken": "DP Taken", "di": "DI", "month": "Month", "created_at": "Date Added"}.get(x, x))
     with sc2:

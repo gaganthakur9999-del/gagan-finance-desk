@@ -25,7 +25,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 DB_DIR = "data"
@@ -56,6 +56,9 @@ if USE_POSTGRES:
 # is identical. Writes are NEVER cached - invalidate_cache() is called after
 # every write so the next read always sees fresh data.
 _CACHE_TTL = 30
+
+# Indian Standard Time (UTC+5:30) - the business timezone used for "today".
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _resolve_impl(fn, ttl):
@@ -470,12 +473,15 @@ def get_today_stats():
       - dp_taken / di normalized like amount_to_float (comma-strip + float)
     Returns dict: {"count": int, "dp": float, "di": float}
     """
-    today_dt = datetime.now()
+    today_dt = datetime.now(_IST)
     today_dash = today_dt.strftime("%d-%m-%Y")
     today_slash = today_dt.strftime("%d/%m/%Y")
     today_iso = today_dt.strftime("%Y-%m-%d")
     if USE_POSTGRES:
-        num_expr = "COALESCE(CAST(NULLIF(REPLACE(COALESCE({col}, '0'), ',', ''), '') AS REAL), 0)"
+        # dp_taken / di are REAL (numeric) columns on PostgreSQL, and REPLACE()
+        # only accepts text there - so a plain COALESCE is required. SQLite keeps
+        # the comma-strip for legacy text values.
+        num_expr = "COALESCE({col}, 0)"
     else:
         num_expr = "COALESCE(CAST(REPLACE(COALESCE({col}, '0'), ',', '') AS REAL), 0)"
     dp_sql = num_expr.format(col="dp_taken")
@@ -890,7 +896,7 @@ def search_records(query="", name_filter="", phone_filter="", date_from="", date
         ordr = "DESC" if sort_desc else "ASC"
         se = sort_by
         if sort_by == "bid_date":
-            se = "substr(bid_date,7,4)||'-'||substr(bid_date,4,2)||'-'||substr(bid_date,1,2)"
+            se = "substr(bid_date,7,4)||'-'||substr(bid_date,4,2)||'-'||substr(bid_date,1,2), sr_no"
         cur = _execute(conn, f"SELECT COUNT(*) as t FROM records WHERE {w}", tuple(params), return_cursor=True)
         total = _fetchone(cur)["t"]
         off = (page-1)*page_size
