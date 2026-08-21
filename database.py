@@ -838,7 +838,7 @@ def count_search_records(query="", month=""):
         conds, params = [], []
         if query:
             q = f"%{query.strip()}%"
-            conds.append("(name LIKE ? OR phone LIKE ? OR invoice_no LIKE ? OR bid LIKE ? OR product LIKE ? OR serial_no LIKE ?)")
+            conds.append("(LOWER(name) LIKE LOWER(?) OR LOWER(phone) LIKE LOWER(?) OR LOWER(invoice_no) LIKE LOWER(?) OR LOWER(bid) LIKE LOWER(?) OR LOWER(product) LIKE LOWER(?) OR LOWER(serial_no) LIKE LOWER(?))")
             params.extend([q]*6)
         if month:
             conds.append("month=?")
@@ -859,7 +859,7 @@ def search_records(query="", name_filter="", phone_filter="", date_from="", date
         conds, params = [], []
         if query:
             q = f"%{query.strip()}%"
-            conds.append("(name LIKE ? OR phone LIKE ? OR invoice_no LIKE ? OR bid LIKE ? OR product LIKE ? OR serial_no LIKE ?)")
+            conds.append("(LOWER(name) LIKE LOWER(?) OR LOWER(phone) LIKE LOWER(?) OR LOWER(invoice_no) LIKE LOWER(?) OR LOWER(bid) LIKE LOWER(?) OR LOWER(product) LIKE LOWER(?) OR LOWER(serial_no) LIKE LOWER(?))")
             params.extend([q]*6)
         if month:
             conds.append("month=?")

@@ -352,6 +352,8 @@ Identified by prior investigations only (no invented features):
 - AppTest: all 5 pages pass; Generate Invoice second render ~50 ms.
 - Neon latency itself was not measurable from this machine; the pool/grouped-query design removes per-operation network connects.
 
+**Case-insensitive search (20 Aug 2026):** `search_records()` / `count_search_records()` use `LOWER(column) LIKE LOWER(?)` so the text search matches regardless of case on both SQLite and PostgreSQL (PG `LIKE` was previously case-sensitive; SQLite `LIKE` is ASCII-case-insensitive by default). The leading-wildcard `%q%` pattern already forces a full scan, so the added `LOWER()` has negligible cost and no index can help it anyway.
+
 **Not implemented (per project decision):**
 - `idx_records_month_srno ON records(month, sr_no)` is **documented only** - NOT added to `init_db()` and NOT run against production. If desired, run manually on both backends:
   ```sql

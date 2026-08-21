@@ -174,6 +174,12 @@ Late July 2026 — Cross-platform PDF (fpdf2/mammoth+weasyprint), sync scripts, 
 - **Description:** Replaced per-operation `psycopg2.connect()` with a safe lazy pool, removed import-time DB work, cached read-only results with immediate write invalidation, collapsed the monthly cards into one grouped query, and stopped per-rerun Excel rebuilds on Neon.
 - **Why important:** Removes the per-query network connection overhead on Render/Neon (the dominant cloud latency) and cuts desktop import/startup costs without changing UI, invoice, PDF, or Excel behavior.
 
+### 20. Case-insensitive search (20 Aug 2026)
+- **Date:** 20 Aug 2026 ✅
+- **Evidence:** `search_records()` / `count_search_records()` in `database.py` now use `LOWER(column) LIKE LOWER(?)` for the six searchable fields; verified mixed-case matches (`jaswant` matching `JASWANT` / `Jaswant` / `jAsWaNt`) on SQLite and the same SQL/placeholder path on PostgreSQL.
+- **Description:** PostgreSQL `LIKE` is case-sensitive while SQLite `LIKE` is ASCII-case-insensitive, so the same query behaved differently on the two backends. Lowering both sides of the comparison makes matching consistent everywhere without schema/index/UI changes.
+- **Why important:** One search behaves identically on desktop and Neon; no performance or architecture impact.
+
 ---
 
 ## Categorized History

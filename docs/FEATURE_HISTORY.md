@@ -128,6 +128,7 @@
 | Lazy page/module imports | Dashboard no longer loads PDF/DOCX/Excel stack | 20 Aug 2026 ✅ | ✅ Active | `app.py`, `ui_components.py`, `pages/records.py` |
 | Invoice-number / manual-entry lazy evaluation | No SQL when the value already exists | 20 Aug 2026 ✅ | ✅ Active | `pages/generate_invoice.py`, `ui_components.py` |
 | `PERF_DEBUG=1` instrumentation | Optional query/pool timing (off by default) | 20 Aug 2026 ✅ | ✅ Active | `database.py` |
+| Case-insensitive search matching | `LOWER(col) LIKE LOWER(?)` on both backends | 20 Aug 2026 ✅ | ✅ Active | `database.search_records` / `count_search_records` |
 | Dual-backend protection comments | Never regress PostgreSQL support | 1 Aug 2026 ✅ | ✅ Active (enforced by convention) | `database.py` |
 
 ---

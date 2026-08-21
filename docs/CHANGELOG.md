@@ -93,6 +93,7 @@ Describes the verified state that marks the start of change tracking. No version
 - Eager evaluation of `st.session_state.get("generated_invoice_no", suggest_next_invoice())` - the default argument ran `suggest_next_invoice()` (2 SQL queries) on every rerun even when the value already existed.
 - PostgreSQL Records page rebuilt the entire Excel workbook on every rerun (now cached by fingerprint).
 - `suggest_next_invoice()` ran on every rerun while the collapsed manual-entry form was open.
+- Search matching was case-sensitive on PostgreSQL (`LIKE`) but case-insensitive on SQLite; `search_records()` / `count_search_records()` now use `LOWER(column) LIKE LOWER(?)` so both backends match case-insensitively.
 
 ### Performance
 - `database` module import (no init/migrate at import): ~95-231 ms -> ~53 ms locally; **zero database connections at import**.
