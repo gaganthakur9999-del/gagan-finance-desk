@@ -237,9 +237,6 @@ def page_records():
         selected_label = st.selectbox("Record", options=list(rec_options.keys()), index=0, key="rec_select", label_visibility="collapsed")
         selected_id = rec_options.get(selected_label, records[0].get("id", 1) if records else 1)
 
-    # Invoice number suggestion on edit (show recent invoice numbers - LIMIT 10 SQL)
-    recent_invoices = db.get_recent_invoices(10)
-
     with action_col2:
         st.write("")
         if st.button("✏️ Edit", type="primary", use_container_width=True):
@@ -318,6 +315,8 @@ def page_records():
             regen_invoice = record.get("invoice_no", "")
             regen_serial = record.get("serial_no", "")
 
+            # Recent invoice numbers - fetched only when this regenerate UI is open.
+            recent_invoices = db.get_recent_invoices(10)
             inv_suggestions = [inv for inv in recent_invoices if inv != regen_invoice][:5]
 
             rc1, rc2 = st.columns(2)
@@ -402,6 +401,8 @@ def page_records():
                 ec1, ec2, ec3 = st.columns(3)
                 with ec1:
                     e_invoice = st.text_input("Invoice No", value=record.get("invoice_no", ""))
+                    # Recent invoice numbers - fetched only when this edit form is open.
+                    recent_invoices = db.get_recent_invoices(10)
                     if recent_invoices:
                         st.caption(f"Recent: {', '.join(recent_invoices[:3])}")
                 with ec2:
