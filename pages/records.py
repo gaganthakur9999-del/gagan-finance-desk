@@ -9,7 +9,7 @@ from datetime import datetime
 import streamlit as st
 
 from config import EXCEL_FILE, settings
-from excel_utils import export_rows_to_xlsx, export_to_excel
+from excel_utils import export_to_excel
 from helpers import (
     _add_search_history, _format_month, _get_search_history, _normalize_date,
     _parse_date, log_activity
@@ -30,18 +30,6 @@ def _excel_download_bytes(fingerprint):
     if not records:
         return None
     wb = export_to_excel(records)
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
-@st.cache_data(show_spinner=False)
-def _month_view_xlsx(rows, cols, sheet_name):
-    """Build an XLSX workbook (single sheet) from the currently displayed
-    Records rows (already in memory). Cached by the rows themselves so a plain
-    rerun never rebuilds it. No database access."""
-    dict_rows = [dict(zip(cols, r)) for r in rows]
-    wb = export_rows_to_xlsx(dict_rows, list(cols), sheet_name)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -227,14 +215,6 @@ def page_records():
             st.session_state.selected_ids = []
             st.success("Selected records deleted!")
             st.rerun()
-
-    with bulk_col3:
-        if display_data:
-            month_rows = tuple(tuple(d.get(c, "") for c in display_cols) for d in display_data)
-            month_file = rec_selected_month if rec_selected_month != "ALL_RECORDS" else "ALL_RECORDS"
-            month_xlsx = _month_view_xlsx(month_rows, tuple(display_cols), month_file)
-            st.download_button("⬇️ Download Month XLSX", month_xlsx,
-                               file_name=f"{month_file}.xlsx", use_container_width=True)
 
     # ---- Edit, Delete, Regenerate, Move ----
     st.markdown("---")
