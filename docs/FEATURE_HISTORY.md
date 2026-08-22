@@ -129,6 +129,8 @@
 | Invoice-number / manual-entry lazy evaluation | No SQL when the value already exists | 20 Aug 2026 ✅ | ✅ Active | `pages/generate_invoice.py`, `ui_components.py` |
 | `PERF_DEBUG=1` instrumentation | Optional query/pool timing (off by default) | 20 Aug 2026 ✅ | ✅ Active | `database.py` |
 | Case-insensitive search matching | `LOWER(col) LIKE LOWER(?)` on both backends | 20 Aug 2026 ✅ | ✅ Active | `database.search_records` / `count_search_records` |
+| Records page month XLSX download | Export the currently displayed Records page as .xlsx (in-memory; `✅` column excluded) | 22 Aug 2026 ✅ | ✅ Active | `pages/records.py`, `excel_utils.export_rows_to_xlsx` |
+| EMI table XLSX downloads | Per-table .xlsx export of displayed EMI data | 22 Aug 2026 ✅ | ✅ Active | `pages/emi_notification.py` |
 | Dual-backend protection comments | Never regress PostgreSQL support | 1 Aug 2026 ✅ | ✅ Active (enforced by convention) | `database.py` |
 
 ---

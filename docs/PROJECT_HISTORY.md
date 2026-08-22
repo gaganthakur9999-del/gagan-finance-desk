@@ -180,6 +180,12 @@ Late July 2026 — Cross-platform PDF (fpdf2/mammoth+weasyprint), sync scripts, 
 - **Description:** PostgreSQL `LIKE` is case-sensitive while SQLite `LIKE` is ASCII-case-insensitive, so the same query behaved differently on the two backends. Lowering both sides of the comparison makes matching consistent everywhere without schema/index/UI changes.
 - **Why important:** One search behaves identically on desktop and Neon; no performance or architecture impact.
 
+### 21. XLSX downloads for Records & EMI tables (22 Aug 2026)
+- **Date:** 22 Aug 2026 ✅
+- **Evidence:** `excel_utils.export_rows_to_xlsx()` generic single-sheet builder; Records "Download Month XLSX" exports only the displayed page (19 columns, UI `✅` column excluded); EMI per-table "Download XLSX" (9 columns); bytes cached by row tuples; verified zero database access during download preparation and valid/openable workbooks.
+- **Description:** The Streamlit `st.dataframe` toolbar only exports CSV (not configurable), so dedicated XLSX buttons were added that export the already-displayed in-memory rows with no extra database queries.
+- **Why important:** Native Excel files for the visible Records/EMI data without adding Neon round trips or touching the existing ALL_RECORDS.xlsx workflow.
+
 ---
 
 ## Categorized History

@@ -106,3 +106,14 @@ Describes the verified state that marks the start of change tracking. No version
 
 ### Refactoring
 - No UI, invoice, PDF, or Excel format changes. Business logic and both database backends (SQLite + PostgreSQL/Neon) preserved.
+
+**Follow-up (2026-08-22) - XLSX downloads for Records & EMI tables.**
+
+### Added
+- Records page "Download Month XLSX": exports the currently displayed page's records as `.xlsx` (in-memory data, no database query); the UI-only `✅` selection column is excluded; filename uses the selected month.
+- EMI Notification page: each displayed EMI table has a "Download XLSX" button (`EMI_<MONTH_YYYY>.xlsx`).
+- `excel_utils.export_rows_to_xlsx()` - generic single-sheet XLSX builder for in-memory table data (reuses `style_header`).
+
+### Changed
+- XLSX bytes are cached by the displayed rows - no per-rerun rebuild, zero database queries, zero Neon round trips.
+- The existing "Download Excel File" / `ALL_RECORDS.xlsx` workflow, the Streamlit CSV dataframe toolbar, SQLite/PostgreSQL behavior, and invoice/PDF/DOCX/Excel workflows are unchanged.

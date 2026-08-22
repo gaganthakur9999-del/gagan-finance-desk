@@ -55,6 +55,26 @@ def style_header(ws):
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
 
+def export_rows_to_xlsx(rows, columns=None, sheet_name="Sheet1"):
+    """Build a single-sheet XLSX workbook from a list of dicts (in-memory data).
+
+    Lightweight generic helper for per-table downloads (Records month view,
+    EMI tables). Uses the shared style_header() for a bold header; no month
+    grouping and no alternate-row styling. The existing multi-sheet
+    export_to_excel() / update_excel_file() and the ALL_RECORDS workflow are
+    unaffected."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = (sheet_name or "Sheet1")[:31]
+    cols = columns if columns is not None else (list(rows[0].keys()) if rows else [])
+    ws.append(cols)
+    if cols:
+        style_header(ws)
+    for r in rows:
+        ws.append([r.get(c, "") for c in cols])
+    return wb
+
+
 def update_excel_file():
     records = db.load_all_records()
     if records:

@@ -1,7 +1,9 @@
+import io
 from datetime import datetime
 import streamlit as st
 from helpers import amount_to_float, _parse_date
 from ui_components import app_header
+import excel_utils
 import database as db
 
 
@@ -58,7 +60,18 @@ def compute_emi_info(record):
     }
 
 
-def _show_table(title, rows):
+@st.cache_data(show_spinner=False)
+def _emi_table_xlsx(rows, cols):
+    """Build an XLSX workbook (single sheet) from an already-loaded EMI table
+    (in-memory). Cached by the rows themselves; no database access."""
+    dict_rows = [dict(zip(cols, r)) for r in rows]
+    wb = excel_utils.export_rows_to_xlsx(dict_rows, list(cols), "EMI")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _show_table(title, rows, file_base="EMI"):
     st.markdown(f"### {title}")
     if not rows:
         st.info("No customers in this category.")
@@ -72,6 +85,11 @@ def _show_table(title, rows):
             "Scheme": r["scheme"], "EMI Amount (Rs)": f"{r['emi_amount']:,.0f}",
         })
     st.dataframe(display, width="stretch", hide_index=True)
+    if display:
+        emi_rows = tuple(tuple(d.get(k, "") for k in display[0].keys()) for d in display)
+        emi_xlsx = _emi_table_xlsx(emi_rows, tuple(display[0].keys()))
+        st.download_button("⬇️ Download XLSX", emi_xlsx,
+                           file_name=f"EMI_{file_base}.xlsx", use_container_width=True)
 
 
 def page_emi_notification():
@@ -104,9 +122,11 @@ def page_emi_notification():
     key1 = (month1.year, month1.month)
     key2 = (month2.year, month2.month)
     with t1:
-        _show_table(f"EMI Ending In {month1.strftime('%B %Y')}", month_map.get(key1, []))
+        _show_table(f"EMI Ending In {month1.strftime('%B %Y')}", month_map.get(key1, []),
+                   file_base=month1.strftime("%B_%Y"))
     with t2:
-        _show_table(f"EMI Ending In {month2.strftime('%B %Y')}", month_map.get(key2, []))
+        _show_table(f"EMI Ending In {month2.strftime('%B %Y')}", month_map.get(key2, []),
+                   file_base=month2.strftime("%B_%Y"))
 
     # Navigation BELOW the data - month names on own line, then 3 equal buttons
     st.divider()
