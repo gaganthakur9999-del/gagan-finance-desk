@@ -180,6 +180,12 @@ Late July 2026 — Cross-platform PDF (fpdf2/mammoth+weasyprint), sync scripts, 
 - **Description:** PostgreSQL `LIKE` is case-sensitive while SQLite `LIKE` is ASCII-case-insensitive, so the same query behaved differently on the two backends. Lowering both sides of the comparison makes matching consistent everywhere without schema/index/UI changes.
 - **Why important:** One search behaves identically on desktop and Neon; no performance or architecture impact.
 
+### 21. Defer recent-invoice hint (22 Aug 2026)
+- **Date:** 22 Aug 2026 ✅
+- **Evidence:** `pages/records.py` moved `db.get_recent_invoices(10)` out of the unconditional Records-page rerun path into the two branches that display it (the Edit form and the Regenerate UI); verified by a mocked-call AppTest that plain Records renders (open/search/month/sort/page/page-size) make zero calls and Edit/Regenerate make exactly one each.
+- **Description:** The recent-invoice hint is only rendered by the Edit and Regenerate panels, but was queried on every Records rerun - an unnecessary query (and, on Render, a Neon round trip) whenever the user merely views, searches, or paginates Records. The call now executes only when those panels are open.
+- **Why important:** Removes one query/round trip from the most-visited page without changing any displayed data or behavior.
+
 ---
 
 ## Categorized History

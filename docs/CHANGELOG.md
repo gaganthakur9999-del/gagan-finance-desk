@@ -100,6 +100,7 @@ Describes the verified state that marks the start of change tracking. No version
 - `ui_components` heavy import chain (openpyxl + docxtpl + num2words + PDF stack): ~2,032 ms -> ~7 ms core chain; Dashboard page imports in ~1 ms with no heavy modules.
 - Generate Invoice page second render (cached): ~50 ms in AppTest.
 - Neon round-trips reduced architecturally: per-operation connection pool, one grouped month query, fingerprint-keyed Excel cache, batched sync, no duplicate COUNT. (Exact Neon latency not measurable locally; all queries verified against SQLite.)
+- Records page calls `get_recent_invoices(10)` only when the Edit/Regenerate UI is open, not on every normal rerun - one fewer query / Neon round trip per Records rerun (22 Aug 2026).
 
 ### Documentation
 - Updated `docs/CHANGELOG.md`, `docs/FEATURE_HISTORY.md`, `docs/PROJECT_HISTORY.md`, `docs/TECHNICAL_HISTORY.md`.

@@ -345,6 +345,7 @@ Identified by prior investigations only (no invented features):
 - Records page reuses the `total` returned by `search_records()` (duplicate `count_search_records()` removed).
 - Settings Sync Now batched to one connection + `executemany`.
 - `suggest_next_invoice()` no longer runs on every rerun (eager-default fix + session-state guard in the manual-entry form).
+- Records page `get_recent_invoices(10)` deferred into the Edit/Regenerate branches - no query/Neon round trip on plain Records reruns (22 Aug 2026).
 
 **Measured locally (SQLite, 1,425 rows):**
 - `database` import: ~95-231 ms -> ~53 ms (zero connections at import).
