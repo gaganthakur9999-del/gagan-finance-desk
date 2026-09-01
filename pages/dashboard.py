@@ -47,7 +47,7 @@ def page_dashboard():
         if monthly_counts:
             sorted_months = sorted(monthly_counts.keys(), key=month_sort_key)
             chart_data = {m: monthly_counts[m] for m in sorted_months}
-            st.bar_chart(chart_data, color="#4d8fad")
+            st.bar_chart(chart_data, color="#4d8fad", sort=False)
             st.caption("Records per month")
         else:
             st.info("No data available yet.")
@@ -65,12 +65,12 @@ def page_dashboard():
                 _, last_day = calendar.monthrange(month_dt.year, month_dt.month)
                 sorted_dates = [f"{d:02d}-{month_dt.month:02d}-{month_dt.year}" for d in range(1, last_day + 1)]
                 chart_data = {d: daily_counts.get(d, 0) for d in sorted_dates}
-                st.bar_chart(chart_data, color="#4d8fad")
+                st.bar_chart(chart_data, color="#4d8fad", sort=False)
                 st.caption(f"Records per day - {month_param.replace('_', ' ').title()}")
             except (ValueError, TypeError):
                 sorted_d = sorted(daily_counts.keys(), key=lambda x: _parse_date(x) or datetime.min)
                 chart_data = {d: daily_counts[d] for d in sorted_d}
-                st.bar_chart(chart_data, color="#4d8fad")
+                st.bar_chart(chart_data, color="#4d8fad", sort=False)
                 st.caption("Records per day")
         else:
             st.info("No daily data.")
