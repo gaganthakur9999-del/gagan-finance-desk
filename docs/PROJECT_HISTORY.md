@@ -186,6 +186,12 @@ Late July 2026 — Cross-platform PDF (fpdf2/mammoth+weasyprint), sync scripts, 
 - **Description:** The recent-invoice hint is only rendered by the Edit and Regenerate panels, but was queried on every Records rerun - an unnecessary query (and, on Render, a Neon round trip) whenever the user merely views, searches, or paginates Records. The call now executes only when those panels are open.
 - **Why important:** Removes one query/round trip from the most-visited page without changing any displayed data or behavior.
 
+### 22. Dashboard ALL-MONTHS chart ordering fix (1 Sep 2026)
+- **Date:** 1 Sep 2026 ✅
+- **Evidence:** `pages/dashboard.py` passes `sort=False` to its three `st.bar_chart()` calls; regression tests in `tests/test_dashboard_chart_ordering.py` assert `month_sort_key` ordering, chronological `chart_data`, and that `sort=False` produces a `"sort": null` Vega-Lite encoding (data order) while the default produces no sort key (Vega-Lite's default ascending/lexicographic order).
+- **Description:** The Records Overview chart built chronologically ordered `chart_data`, but `st.bar_chart()` defaults to `sort=True`, which lets Vega-Lite re-sort the categorical X-axis lexicographically - so month-name labels (APRIL_2025, AUGUST_2024, ...) appeared alphabetically instead of chronologically when ALL MONTHS was selected. Single-month labels (zero-padded DD-MM-YYYY) sort lexicographically in chronological order, which is why only ALL MONTHS was affected. Passing `sort=False` preserves the already-correct Python data order.
+- **Why important:** Correct chronological X-axis ordering for the monthly overview chart; the fix is chart-layer/backend-agnostic (no SQL/schema change), so offline (SQLite) and online (PostgreSQL/Neon) behave identically.
+
 ---
 
 ## Categorized History

@@ -209,6 +209,7 @@ app.py                        (75 LOC)  — entry: config → CSS → logging �
 
 ### Dashboard
 - `pages/dashboard.py` — totals (records/DP/DI), monthly GROUP BY chart (ALL_MONTHS), daily chart per selected month (dates normalized for display); redundant monthly scan skipped when a month is chosen.
+- Bar charts pass `sort=False` so the already chronologically ordered data (`month_sort_key` / sorted day list) is not re-sorted lexicographically by Vega-Lite's default ascending sort (fix 1 Sep 2026).
 
 ### Search
 - `pages/records.py` + `database.search_records` — 6-column OR-LIKE search (name/phone/invoice/BID/product/serial), month filter, date-range (via `substr(bid_date,7,4)` ISO-compose), 6 sort keys, pagination (20–200), search-history chips, COUNT-only caption.

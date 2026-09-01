@@ -107,3 +107,22 @@ Describes the verified state that marks the start of change tracking. No version
 
 ### Refactoring
 - No UI, invoice, PDF, or Excel format changes. Business logic and both database backends (SQLite + PostgreSQL/Neon) preserved.
+
+**Follow-up (2026-09-01) - Dashboard ALL-MONTHS chart ordering fix.**
+
+### Issue
+- Dashboard "Records Overview" showed months in the wrong order when **ALL MONTHS** was selected (e.g. APRIL_2025, AUGUST_2024, ...).
+
+### Root cause
+- Python correctly generated chronologically ordered `chart_data` (via `month_sort_key`).
+- `st.bar_chart()` defaulted to `sort=True`, so Streamlit let Vega-Lite apply its default lexicographic sort to the categorical X-axis.
+- Month-name labels (`APRIL_2025`, `AUGUST_2024`, ...) therefore appeared alphabetically, not chronologically. Single-month labels (zero-padded DD-MM-YYYY) sort lexicographically in chronological order, which is why only ALL MONTHS was affected.
+
+### Changed
+- `pages/dashboard.py` now passes `sort=False` to the bar charts, so Vega-Lite renders the already-correct Python data order without re-sorting it.
+- `month_sort_key` remains the source of chronological ordering.
+- No database schema or SQL changes; the fix is chart-layer only and applies identically to SQLite/offline and PostgreSQL/online.
+
+### Testing
+- Added `tests/test_dashboard_chart_ordering.py` (5 regression tests).
+- Existing SQLite functional suite, case-insensitive search tests, and the full AppTest all passed; the dashboard chart ordering was also verified manually in the running app.
