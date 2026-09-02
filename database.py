@@ -757,7 +757,7 @@ def load_emi_candidates():
     try:
         cur = _execute(conn,
             "SELECT name, phone, alt_phone, bid_date, product, actual_product, emi, scheme "
-            "FROM records WHERE %s AND scheme LIKE '%/%' AND bid_date != ''" % _live_where(conn),
+            "FROM records WHERE %s AND scheme LIKE '%%/%%' AND bid_date != ''" % _live_where(conn),
             return_cursor=True)
         return _fetchall(cur)
     except Exception:
