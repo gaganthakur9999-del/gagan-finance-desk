@@ -45,9 +45,23 @@ except ImportError:
     sys.exit(1)
 
 
+def _live_where(conn):
+    """Legacy parity: tombstoned (Sync V2 deleted_at) records are invisible to
+    the OLD sync system, exactly as if they had been physically deleted (the
+    pre-Phase-6 behaviour). No-op when the records table has no deleted_at."""
+    try:
+        has_deleted = "deleted_at" in {r[1] for r in
+                                       conn.execute("PRAGMA table_info(records)")}
+    except sqlite3.Error:
+        has_deleted = False
+    return "WHERE deleted_at IS NULL" if has_deleted else ""
+
+
 def get_offline_keys():
     conn = sqlite3.connect(DB_FILE)
-    rows = conn.execute("SELECT invoice_no, serial_no FROM records").fetchall()
+    rows = conn.execute(
+        "SELECT invoice_no, serial_no FROM records %s" % _live_where(conn)
+    ).fetchall()
     conn.close()
     return {(r[0] or "", r[1] or "") for r in rows}
 
@@ -71,7 +85,11 @@ def get_online_records():
 def insert_offline(record):
     conn = sqlite3.connect(DB_FILE)
     month = record.get("month") or ""
-    sr = conn.execute("SELECT COALESCE(MAX(sr_no),0)+1 FROM records WHERE month=?", (month,)).fetchone()[0]
+    live = _live_where(conn)          # "WHERE deleted_at IS NULL" or ""
+    cond = " AND deleted_at IS NULL" if live else ""
+    sr = conn.execute(
+        "SELECT COALESCE(MAX(sr_no),0)+1 FROM records WHERE month=?%s" % cond,
+        (month,)).fetchone()[0]
     conn.execute("""
         INSERT INTO records (sr_no,bid_date,invoice_no,name,xcell,product,serial_no,
             price,emi,di,bid,dp_taken,scheme,actual_product,given_prod_price,

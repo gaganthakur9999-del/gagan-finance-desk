@@ -25,6 +25,7 @@ import sqlite3
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -433,6 +434,7 @@ def invalidate_cache():
 
     Clears the Streamlit read-result cache when inside a runtime; safe no-op
     elsewhere."""
+
     try:
         import streamlit as _streamlit
         if getattr(_streamlit, "runtime", None) and _streamlit.runtime.exists():
@@ -441,10 +443,139 @@ def invalidate_cache():
         pass
 
 
+# ---------------------------------------------------------------------------
+# SYNC V2 (Phase 6) helper layer
+#
+# These helpers decide whether a local (SQLite) database has the additive
+# Phase-1 Sync V2 schema. When it does, normal CRUD writes ALSO produce durable
+# outbox operations in the SAME transaction (via sync_write.py) and normal
+# business views exclude tombstones (deleted_at IS NULL), exactly as if the
+# record had been physically deleted. When the schema is absent - or when the
+# process is running against PostgreSQL/Neon (the online application) - the
+# exact legacy behaviour is preserved and NOTHING here changes any SQL.
+# ---------------------------------------------------------------------------
+_RECORD_FIELDS = ["sr_no", "bid_date", "invoice_no", "name", "xcell", "product",
+                  "serial_no", "price", "emi", "di", "bid", "dp_taken", "scheme",
+                  "actual_product", "given_prod_price", "phone", "alt_phone",
+                  "month", "remarks"]
+_SYNC_COLUMNS = frozenset(["sync_id", "server_rev", "row_rev", "base_json",
+                           "deleted_at"])
+
+
+def _sync_schema_present(conn):
+    """True when records carries the full Phase-1 Sync V2 schema (columns +
+    outbox table) on the local SQLite database. PostgreSQL/online is never
+    sync-write enabled."""
+    if USE_POSTGRES:
+        return False
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(records)")}
+        if not _SYNC_COLUMNS <= cols:
+            return False
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        return "outbox" in tables
+    except Exception:
+        return False
+
+
+def _online_sync_ready(conn):
+    """Online (PostgreSQL/Neon) application: True when the records table carries
+    the Phase-1 Sync V2 schema (columns + outbox). When True, normal Online
+    writes MUST go through the Sync-V2-aware seam (online_write.py) so changes
+    become discoverable by Offline incremental pull."""
+    if not USE_POSTGRES:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema='public' "
+            "AND table_name='records' AND column_name='sync_id'")
+        has_col = cur.fetchone() is not None
+        cur.execute("SELECT to_regclass('public.outbox')")
+        out = cur.fetchone()
+        cur.close()
+        return has_col and bool(out and out[0])
+    except Exception:
+        return False
+
+
+def _live_where(conn):
+    """SQL fragment that hides Sync V2 tombstones from normal business views.
+    Returns 'deleted_at IS NULL' when the tombstone column exists (SQLite and,
+    since Phase 7B, PostgreSQL/Neon where the Online seam creates tombstones),
+    else '1=1' (legacy schema) so every existing query keeps its meaning."""
+    if USE_POSTGRES:
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns WHERE "
+                "table_schema='public' AND table_name='records' AND "
+                "column_name='deleted_at'")
+            has_deleted = cur.fetchone() is not None
+            cur.close()
+            return "deleted_at IS NULL" if has_deleted else "1=1"
+        except Exception:
+            return "1=1"
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(records)")}
+        return "deleted_at IS NULL" if "deleted_at" in cols else "1=1"
+    except Exception:
+        return "1=1"
+
+
+def _business_snapshot(sr_no, bid_date_out, invoice_no, data, serial_no, xcell,
+                       dp_taken, product_given, given_prod_price, alt_phone,
+                       remarks, month):
+    """Canonical business snapshot for add/update (mirrors the legacy column
+    list/order so the outbox payload equals the stored row exactly)."""
+    return {
+        "sr_no": sr_no,
+        "bid_date": bid_date_out,
+        "invoice_no": invoice_no,
+        "name": data.get("name", ""),
+        "xcell": xcell,
+        "product": data.get("product", ""),
+        "serial_no": serial_no,
+        "price": _to_float(data.get("price", 0)),
+        "emi": _to_float(data.get("emi", 0)),
+        "di": _to_float(data.get("di", 0)),
+        "bid": data.get("bid", ""),
+        "dp_taken": _to_float(dp_taken),
+        "scheme": data.get("scheme", ""),
+        "actual_product": product_given,
+        "given_prod_price": _to_float(given_prod_price),
+        "phone": data.get("mobile", ""),
+        "alt_phone": alt_phone,
+        "month": month,
+        "remarks": remarks,
+    }
+
+
+def _next_sr_no(conn, month):
+    """Next sequential sr_no in a month (live records only when tombstones
+    exist; the pre-Phase-6 semantics are identical when no tombstone column)."""
+    cur = _execute(conn,
+                   "SELECT COALESCE(MAX(sr_no),0)+1 as n FROM records "
+                   "WHERE month=? AND %s" % _live_where(conn),
+                   (month,), return_cursor=True)
+    return _fetchone(cur)["n"]
+
+
+def _live_rows_in_month(conn, month):
+    """Full live rows of a month in display order (tombstones excluded)."""
+    cur = _execute(conn,
+                   "SELECT * FROM records WHERE month=? AND %s "
+                   "ORDER BY sr_no ASC, id ASC" % _live_where(conn),
+                   (month,), return_cursor=True)
+    return [dict(r) for r in _fetchall(cur)]
+
+
+
 def load_all_records():
     conn = get_connection()
     try:
-        return _fetchall(_execute(conn, "SELECT * FROM records ORDER BY id DESC", return_cursor=True))
+        return _fetchall(_execute(conn, "SELECT * FROM records WHERE %s ORDER BY id DESC" % _live_where(conn), return_cursor=True))
     except Exception:
         return []
     finally:
@@ -455,7 +586,7 @@ def count_records():
     """Return the total number of records (optimized COUNT(*) instead of loading all rows)."""
     conn = get_connection()
     try:
-        cur = _execute(conn, "SELECT COUNT(*) as total FROM records", return_cursor=True)
+        cur = _execute(conn, "SELECT COUNT(*) as total FROM records WHERE %s" % _live_where(conn), return_cursor=True)
         row = _fetchone(cur)
         return int(row["total"]) if row and row["total"] is not None else 0
     except Exception:
@@ -490,7 +621,7 @@ def get_today_stats():
     try:
         cur = _execute(conn,
             f"SELECT COUNT(*) as total, COALESCE(SUM({dp_sql}),0) as dp, COALESCE(SUM({di_sql}),0) as di "
-            "FROM records WHERE bid_date IN (?,?,?)",
+            "FROM records WHERE %s AND bid_date IN (?,?,?)" % _live_where(conn),
             (today_dash, today_slash, today_iso), return_cursor=True)
         row = _fetchone(cur) or {}
         return {
@@ -551,7 +682,7 @@ def get_latest_invoice_yy_code():
         )
         cur = _execute(conn,
             f"SELECT COALESCE(MAX(SUBSTR(invoice_no,1,4)), '') AS code "
-            f"FROM records WHERE {digits_cond}",
+            f"FROM records WHERE {_live_where(conn)} AND {digits_cond}",
             return_cursor=True)
         row = _fetchone(cur)
         return str(row["code"] or "") if row else ""
@@ -574,7 +705,7 @@ def get_max_invoice_counter(ym_code):
         )
         cur = _execute(conn,
             f"SELECT COALESCE(MAX(CAST(SUBSTR(invoice_no,5) AS INTEGER)), 0) AS n "
-            f"FROM records WHERE SUBSTR(invoice_no,1,4)=? AND {digits_cond}",
+            f"FROM records WHERE {_live_where(conn)} AND SUBSTR(invoice_no,1,4)=? AND {digits_cond}",
             (ym_code,), return_cursor=True)
         row = _fetchone(cur)
         return int(row["n"] or 0) if row else 0
@@ -593,7 +724,7 @@ def get_recent_invoices(limit=10):
     conn = get_connection()
     try:
         cur = _execute(conn,
-            "SELECT invoice_no FROM records WHERE invoice_no != '' ORDER BY id DESC LIMIT ?",
+            "SELECT invoice_no FROM records WHERE %s AND invoice_no != '' ORDER BY id DESC LIMIT ?" % _live_where(conn),
             (limit,), return_cursor=True)
         return [r["invoice_no"] for r in _fetchall(cur)]
     except Exception:
@@ -608,7 +739,7 @@ def get_record_id_by_month_srno(month, sr_no):
     conn = get_connection()
     try:
         cur = _execute(conn,
-            "SELECT id FROM records WHERE month=? AND sr_no=? ORDER BY id DESC LIMIT 1",
+            "SELECT id FROM records WHERE month=? AND sr_no=? AND %s ORDER BY id DESC LIMIT 1" % _live_where(conn),
             (month, sr_no), return_cursor=True)
         return _fetchone(cur)
     except Exception:
@@ -626,7 +757,7 @@ def load_emi_candidates():
     try:
         cur = _execute(conn,
             "SELECT name, phone, alt_phone, bid_date, product, actual_product, emi, scheme "
-            "FROM records WHERE scheme LIKE '%/%' AND bid_date != ''",
+            "FROM records WHERE %s AND scheme LIKE '%/%' AND bid_date != ''" % _live_where(conn),
             return_cursor=True)
         return _fetchall(cur)
     except Exception:
@@ -653,24 +784,50 @@ def add_record(invoice_no, data, serial_no, xcell, dp_taken, product_given, give
         from helpers import _normalize_date
         bid_date_out = _normalize_date(bid_str)
         _execute(conn, "BEGIN")
-        cur = _execute(conn,
-            "SELECT COALESCE(MAX(sr_no),0)+1 as n FROM records WHERE month=?",
-            (month,), return_cursor=True)
-        sr_no = _fetchone(cur)["n"]
-        insert_sql = ("INSERT INTO records (sr_no,bid_date,invoice_no,name,xcell,product,serial_no,price,emi,di,bid,dp_taken,scheme,actual_product,given_prod_price,phone,alt_phone,month,remarks) "
-                      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        sr_no = _next_sr_no(conn, month)
+        business = _business_snapshot(
+            sr_no, bid_date_out, invoice_no, data, serial_no, xcell, dp_taken,
+            product_given, given_prod_price, alt_phone, remarks, month)
+        if _sync_schema_present(conn):
+            # Sync V2 create: business row + stable sync_id + row_rev + outbox
+            # operation in ONE local transaction. No network, no online invoice
+            # reservation - invoice numbering and sr_no stay exactly as before.
+            from sync_write import enqueue_create
+            sync_id = str(uuid.uuid4())
+            cols = _RECORD_FIELDS + ["sync_id", "row_rev"]
+            marks = ",".join("?" * len(cols))
+            params = [business[f] for f in _RECORD_FIELDS] + [sync_id, 1]
+            cur = _execute(conn,
+                           "INSERT INTO records (%s) VALUES (%s)"
+                           % (",".join(cols), marks), tuple(params),
+                           return_cursor=True)
+            new_id = _lastrowid(cur)
+            enqueue_create(conn, new_id)
+            _commit(conn)
+            invalidate_cache()
+            return new_id
+        if _online_sync_ready(conn):
+            # Online (Render/Neon) create: Sync-V2-aware seam assigns a stable
+            # sync_id EXACTLY once, allocates a server revision, writes base_json
+            # and advances server_rev so Offline pull discovers this record.
+            from online_write import create_row
+            new_id = create_row(conn, True, business)
+            _commit(conn)
+            invalidate_cache()
+            return new_id
+        insert_sql = ("INSERT INTO records (%s) "
+                      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                      % ",".join(_RECORD_FIELDS))
         if USE_POSTGRES:
             insert_sql = insert_sql.rstrip() + " RETURNING id"
         cur = _execute(conn, insert_sql,
-            (sr_no, bid_date_out, invoice_no, data.get("name",""), xcell, data.get("product",""), serial_no,
-             _to_float(data.get("price",0)), _to_float(data.get("emi",0)), _to_float(data.get("di",0)), data.get("bid",""),
-             _to_float(dp_taken), data.get("scheme",""), product_given, _to_float(given_prod_price), data.get("mobile",""), alt_phone, month, remarks),
-            return_cursor=True)
+                       tuple([business[f] for f in _RECORD_FIELDS]),
+                       return_cursor=True)
         new_id = _lastrowid(cur)
         _commit(conn)
         invalidate_cache()
         return new_id
-    except Exception as e:
+    except Exception:
         _rollback(conn)
         raise
     finally:
@@ -692,6 +849,43 @@ def update_record(record_id, invoice_no, data, serial_no, xcell, dp_taken, produ
         # Normalize bid_date to the canonical DD-MM-YYYY storage format (same as add_record).
         from helpers import _normalize_date
         bid_date_out = _normalize_date(bid_str)
+        if _sync_schema_present(conn):
+            # Sync V2 update: ONE transaction = read existing row/base + business
+            # change + row_rev/updated_at + outbox op + coalesce. base_json and
+            # server_rev are NEVER touched by an edit.
+            from sync_write import finalize_edit, row_to_dict
+            _execute(conn, "BEGIN")
+            row = row_to_dict(conn, record_id)
+            if row is None or row.get("deleted_at"):
+                return True  # row gone / tombstoned: no-op (legacy parity)
+            business = _business_snapshot(
+                row.get("sr_no"), bid_date_out, invoice_no, data, serial_no,
+                xcell, dp_taken, product_given, given_prod_price, alt_phone,
+                remarks, month)
+            set_sql = ", ".join("%s=?" % f for f in _RECORD_FIELDS)
+            params = tuple([business[f] for f in _RECORD_FIELDS] + [record_id])
+            _execute(conn, "UPDATE records SET %s WHERE id=?" % set_sql, params)
+            finalize_edit(conn, row, business)
+            _commit(conn)
+            invalidate_cache()
+            return True
+        if _online_sync_ready(conn):
+            # Online edit: preserve sync_id, allocate a server revision, advance
+            # server_rev, and refresh base_json to the server-current snapshot so
+            # Offline incremental pull discovers the change.
+            from online_write import edit_row, row_by_id
+            _execute(conn, "BEGIN")
+            row = row_by_id(conn, True, record_id)
+            if row is None or row.get("deleted_at"):
+                return True  # gone/tombstoned: no-op (legacy parity)
+            business = _business_snapshot(
+                row.get("sr_no"), bid_date_out, invoice_no, data, serial_no,
+                xcell, dp_taken, product_given, given_prod_price, alt_phone,
+                remarks, month)
+            edit_row(conn, True, record_id, business)
+            _commit(conn)
+            invalidate_cache()
+            return True
         _execute(conn,
             "UPDATE records SET bid_date=?,invoice_no=?,name=?,xcell=?,product=?,serial_no=?,price=?,emi=?,di=?,bid=?,dp_taken=?,scheme=?,actual_product=?,given_prod_price=?,phone=?,alt_phone=?,month=?,remarks=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (bid_date_out, invoice_no, data.get("name",""), xcell, data.get("product",""), serial_no,
@@ -700,7 +894,8 @@ def update_record(record_id, invoice_no, data, serial_no, xcell, dp_taken, produ
         _commit(conn)
         invalidate_cache()
         return True
-    except Exception as e:
+    except Exception:
+        _rollback(conn)
         raise
     finally:
         conn.close()
@@ -709,6 +904,45 @@ def update_record(record_id, invoice_no, data, serial_no, xcell, dp_taken, produ
 def delete_record(record_id):
     conn = get_connection()
     try:
+        if _sync_schema_present(conn):
+            # Sync V2 delete: ONE transaction = tombstone (deleted_at, sync_id
+            # preserved) + durable delete outbox op + month renumbering with one
+            # upsert op per renumbered live row. All or nothing.
+            from sync_write import coalesce, finalize_edit, tombstone
+            from sync_write import business_dict, row_to_dict
+            _execute(conn, "BEGIN")
+            row = row_to_dict(conn, record_id)
+            if row is None or row.get("deleted_at"):
+                return True  # already gone / already a tombstone (no-op)
+            month = row.get("month") or ""
+            tombstone(conn, row)
+            renumbered = False
+            for idx, live_row in enumerate(
+                    _live_rows_in_month(conn, month), start=1):
+                if int(live_row.get("sr_no") or 0) == idx:
+                    continue
+                biz = business_dict(live_row)
+                biz["sr_no"] = idx
+                _execute(conn, "UPDATE records SET sr_no=? WHERE id=?",
+                         (idx, live_row["id"]))
+                finalize_edit(conn, live_row, biz, coalesce=False)
+                renumbered = True
+            if renumbered:
+                coalesce(conn)
+            _commit(conn)
+            invalidate_cache()
+            return True
+        if _online_sync_ready(conn):
+            # Online delete: Sync V2 NEVER physically deletes. The seam stamps a
+            # tombstone, preserves sync_id, advances server_rev (pull-discoverable).
+            from online_write import delete_row
+            _execute(conn, "BEGIN")
+            res = delete_row(conn, True, record_id)
+            if res["result"] == "noop":
+                return True
+            _commit(conn)
+            invalidate_cache()
+            return True
         cur = _execute(conn, "SELECT month FROM records WHERE id=?", (record_id,), return_cursor=True)
         row = _fetchone(cur)
         month = row["month"] if row else ""
@@ -723,6 +957,7 @@ def delete_record(record_id):
         invalidate_cache()
         return True
     except Exception:
+        _rollback(conn)
         raise
     finally:
         conn.close()
@@ -755,7 +990,7 @@ def get_available_months():
     month's sheet appears automatically even with zero records."""
     conn = get_connection()
     try:
-        cur = _execute(conn, "SELECT DISTINCT month FROM records WHERE month!=''", return_cursor=True)
+        cur = _execute(conn, "SELECT DISTINCT month FROM records WHERE %s AND month!=''" % _live_where(conn), return_cursor=True)
         months = [r["month"] for r in _fetchall(cur)]
     except Exception:
         return []
@@ -771,9 +1006,10 @@ def get_available_months():
 def get_dashboard_stats(month="", include_monthly_counts=True):
     conn = get_connection()
     try:
-        mf, p = "", []
+        live = _live_where(conn)
+        mf, p = "WHERE %s" % live, []
         if month:
-            mf, p = "WHERE month=?", [month]
+            mf, p = "WHERE %s AND month=?" % live, [month]
         if USE_POSTGRES:
             xcell_sql = "COALESCE(CAST(NULLIF(REPLACE(COALESCE(xcell, '0'), ',', ''), '') AS REAL), 0)"
         else:
@@ -784,12 +1020,12 @@ def get_dashboard_stats(month="", include_monthly_counts=True):
         s = _fetchone(cur) or {}
         s["monthly_counts"] = {}
         if include_monthly_counts:
-            cur = _execute(conn, "SELECT month, COUNT(*) as c FROM records GROUP BY month", return_cursor=True)
+            cur = _execute(conn, "SELECT month, COUNT(*) as c FROM records WHERE %s GROUP BY month" % live, return_cursor=True)
             s["monthly_counts"] = {r["month"]: r["c"] for r in _fetchall(cur)}
         s["daily_counts"] = {}
         if month:
             cur = _execute(conn,
-                "SELECT bid_date, COUNT(*) as c FROM records WHERE month=? AND bid_date!='' GROUP BY bid_date",
+                "SELECT bid_date, COUNT(*) as c FROM records WHERE %s AND month=? AND bid_date!='' GROUP BY bid_date" % live,
                 (month,), return_cursor=True)
             s["daily_counts"] = {r["bid_date"]: r["c"] for r in _fetchall(cur)}
         return s
@@ -817,7 +1053,7 @@ def get_monthly_card_stats():
             "SELECT month, COUNT(*) as total_records, COALESCE(SUM(dp_taken),0) as total_dp, "
             "COALESCE(SUM(di),0) as total_di, "
             f"SUM({xcell_sql}) as total_xcell "
-            "FROM records GROUP BY month",
+            "FROM records WHERE %s GROUP BY month" % _live_where(conn),
             return_cursor=True,
         )
         out = {}
@@ -849,6 +1085,9 @@ def count_search_records(query="", month=""):
         if month:
             conds.append("month=?")
             params.append(month)
+        live = _live_where(conn)
+        if live != "1=1":
+            conds.append(live)
         w = " AND ".join(conds) if conds else "1=1"
         cur = _execute(conn, f"SELECT COUNT(*) as t FROM records WHERE {w}", tuple(params), return_cursor=True)
         row = _fetchone(cur)
@@ -890,6 +1129,9 @@ def search_records(query="", name_filter="", phone_filter="", date_from="", date
                 dt2 = date_to
             conds.append("substr(bid_date,7,4)||'-'||substr(bid_date,4,2)||'-'||substr(bid_date,1,2)<=?")
             params.append(dt2)
+        live = _live_where(conn)
+        if live != "1=1":
+            conds.append(live)
         w = " AND ".join(conds) if conds else "1=1"
         if sort_by not in ["id","bid_date","invoice_no","name","price","dp_taken","di","month","created_at"]:
             sort_by = "id"
@@ -922,7 +1164,7 @@ def _to_float(v):
 def get_last_invoice():
     conn = get_connection()
     try:
-        cur = _execute(conn, "SELECT invoice_no FROM records ORDER BY id DESC LIMIT 1", return_cursor=True)
+        cur = _execute(conn, "SELECT invoice_no FROM records WHERE %s ORDER BY id DESC LIMIT 1" % _live_where(conn), return_cursor=True)
         row = _fetchone(cur)
         return row["invoice_no"] if row else ""
     except Exception:
@@ -936,7 +1178,7 @@ def check_serial_exists(s):
         return False
     conn = get_connection()
     try:
-        cur = _execute(conn, "SELECT 1 FROM records WHERE LOWER(serial_no)=LOWER(?) LIMIT 1", (s.strip(),), return_cursor=True)
+        cur = _execute(conn, "SELECT 1 FROM records WHERE LOWER(serial_no)=LOWER(?) AND %s LIMIT 1" % _live_where(conn), (s.strip(),), return_cursor=True)
         return _fetchone(cur) is not None
     except Exception:
         return False
@@ -949,7 +1191,7 @@ def check_invoice_exists(s):
         return False
     conn = get_connection()
     try:
-        cur = _execute(conn, "SELECT 1 FROM records WHERE LOWER(invoice_no)=LOWER(?) LIMIT 1", (s.strip(),), return_cursor=True)
+        cur = _execute(conn, "SELECT 1 FROM records WHERE LOWER(invoice_no)=LOWER(?) AND %s LIMIT 1" % _live_where(conn), (s.strip(),), return_cursor=True)
         return _fetchone(cur) is not None
     except Exception:
         return False
@@ -960,6 +1202,44 @@ def check_invoice_exists(s):
 def swap_sr_no(id1, id2):
     conn = get_connection()
     try:
+        if _sync_schema_present(conn):
+            # Sync V2 reorder: ONE transaction swaps both rows' sr_no and writes
+            # one outbox upsert per affected row (sr_no is business/order data,
+            # never identity; no fake sync_id is ever created). sr_no semantics
+            # are unchanged.
+            from sync_write import coalesce, finalize_edit, row_to_dict
+            from sync_write import business_dict
+            row1 = row_to_dict(conn, id1)
+            row2 = row_to_dict(conn, id2)
+            if (not row1 or not row2 or row1.get("deleted_at")
+                    or row2.get("deleted_at")):
+                return False
+            s1, s2 = row1.get("sr_no"), row2.get("sr_no")
+            b1 = business_dict(row1)
+            b1["sr_no"] = s2
+            b2 = business_dict(row2)
+            b2["sr_no"] = s1
+            _execute(conn, "BEGIN")
+            _execute(conn, "UPDATE records SET sr_no=? WHERE id=?", (s2, id1))
+            _execute(conn, "UPDATE records SET sr_no=? WHERE id=?", (s1, id2))
+            finalize_edit(conn, row1, b1, coalesce=False)
+            finalize_edit(conn, row2, b2, coalesce=False)
+            coalesce(conn)
+            _commit(conn)
+            invalidate_cache()
+            return True
+        if _online_sync_ready(conn):
+            # Online SR move: one server revision per affected row in ONE
+            # transaction; sync identity stable, sr_no remains order data.
+            from online_write import swap_sr as online_swap
+            _execute(conn, "BEGIN")
+            ok = online_swap(conn, True, id1, id2)
+            if not ok:
+                _rollback(conn)
+                return False
+            _commit(conn)
+            invalidate_cache()
+            return True
         cur = _execute(conn, "SELECT sr_no FROM records WHERE id=?", (id1,), return_cursor=True)
         s1 = _fetchone(cur)
         cur = _execute(conn, "SELECT sr_no FROM records WHERE id=?", (id2,), return_cursor=True)
@@ -972,6 +1252,9 @@ def swap_sr_no(id1, id2):
         invalidate_cache()
         return True
     except Exception:
+        # Legacy parity: swap failures return False (the UI treats a missing
+        # target as a boundary warning). A Sync V2 failure is rolled back first.
+        _rollback(conn)
         return False
     finally:
         conn.close()

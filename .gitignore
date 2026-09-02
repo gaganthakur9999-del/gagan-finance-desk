@@ -14,6 +14,8 @@ data/*.db-wal
 data/*.db-shm
 data/*.sql
 data/*.json
+# Read-only sync review artifacts (Phase 2) - never commit generated reports
+data/syncv2/
 Excel/ALL_RECORDS.xlsx
 *.log
 

@@ -55,15 +55,27 @@ def get_online_keys():
     return keys
 
 
+def _live_where(conn):
+    """Legacy parity: tombstoned (Sync V2 deleted_at) records are invisible to
+    the OLD sync system, exactly as if they had been physically deleted (the
+    pre-Phase-6 behaviour). No-op when the records table has no deleted_at."""
+    try:
+        has_deleted = "deleted_at" in {r[1] for r in
+                                       conn.execute("PRAGMA table_info(records)")}
+    except sqlite3.Error:
+        has_deleted = False
+    return "WHERE deleted_at IS NULL" if has_deleted else ""
+
+
 def get_offline_records():
-    """Fetch all records from offline SQLite."""
+    """Fetch all live records from offline SQLite (tombstones excluded)."""
     conn = sqlite3.connect(DB_FILE)
     rows = conn.execute("""
         SELECT invoice_no, name, bid_date, xcell, product, serial_no,
                price, emi, di, bid, dp_taken, scheme, actual_product,
                given_prod_price, phone, alt_phone, month, remarks
-        FROM records ORDER BY id ASC
-    """).fetchall()
+        FROM records %s ORDER BY id ASC
+    """ % _live_where(conn)).fetchall()
     conn.close()
     cols = ["invoice_no", "name", "bid_date", "xcell", "product", "serial_no",
             "price", "emi", "di", "bid", "dp_taken", "scheme", "actual_product",

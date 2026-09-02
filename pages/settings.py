@@ -10,6 +10,7 @@ import streamlit as st
 from config import save_settings, settings
 from helpers import _normalize_date, log_activity
 from ui_components import app_header
+from sync_v2_ui import render_settings_section
 import database as db
 
 
@@ -142,6 +143,18 @@ def page_settings():
         except (OSError, PermissionError) as e:
             st.error(f"❌ Failed: {str(e)}")
 
+    if db.USE_POSTGRES:
+        # Render/Neon deployment: no local SQLite database exists here, so the
+        # local-only tools below (backup/restore, classic Sync Now, Sync V2 local
+        # status) are desktop features and MUST NOT render on the Online app.
+        st.divider()
+        st.markdown("### ☁️ Remote (Render/Neon)")
+        st.caption("This deployment runs against the shared Neon PostgreSQL "
+                   "database. Online record writes are Sync V2-captured "
+                   "automatically so they sync back to the desktop app. There "
+                   "is no offline database here and no sync button.")
+        st.stop()
+
     st.divider()
     st.markdown("### 💾 Database Backup & Restore")
     st.caption("Download a backup of your database.")
@@ -169,6 +182,8 @@ def page_settings():
         with st.spinner("🔄 Syncing records to cloud..."):
             _sync_now()
 
+    st.divider()
+    render_settings_section(db_path=db_path)
     st.divider()
     st.markdown("### ℹ️ System Status")
     template_exists = os.path.exists(edited['template_path'])
