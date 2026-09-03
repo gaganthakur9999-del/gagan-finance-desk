@@ -15,6 +15,7 @@ delegated to the existing syncv2 package.
 import os
 
 from syncv2 import server as SVC
+from syncv2 import store as S
 
 
 def get_neon_url():
@@ -63,7 +64,7 @@ class NeonServerAdapter:
         return SVC.list_open_conflicts(self.conn, self.is_pg).__len__()
 
     def row(self, sync_id):
-        return SVC.read_row_full(self.conn, self.is_pg, sync_id)
+        return S.read_row_full(self.conn, self.is_pg, sync_id)
 
     def open_blocking_conflict(self, sync_id):
         return SVC.has_open_conflict(self.conn, self.is_pg, sync_id)

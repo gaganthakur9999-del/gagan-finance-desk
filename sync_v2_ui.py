@@ -101,8 +101,17 @@ def render_settings_section(db_path, engine=None, sync_running=False,
             conflicts = engine.get_open_conflicts()
             st.write("Conflicts needing review: **%d**" % len(conflicts))
         else:
-            st.write("Conflicts needing review: **%d**"
-                     % (local.get("local_open_conflicts") or 0))
+            # Sync V2 conflicts live on the server; locally they surface as
+            # BLOCKED outbox ops. Count both so details match the headline.
+            blocked_ops = outbox.get("blocked", 0) or 0
+            conf_count = (local.get("local_open_conflicts") or 0) + blocked_ops
+            if blocked_ops:
+                st.write("Conflicts needing review: **%d** (%d blocked "
+                         "operation%s waiting on a server conflict)"
+                         % (conf_count, blocked_ops,
+                            "" if blocked_ops == 1 else "s"))
+            else:
+                st.write("Conflicts needing review: **%d**" % conf_count)
 
     if engine is not None:
         st.caption("Review and resolve below.")
