@@ -183,7 +183,9 @@ def page_settings():
             _sync_now()
 
     st.divider()
-    render_settings_section(db_path=db_path)
+    from sync_v2_worker import is_started, is_syncing
+    render_settings_section(db_path=db_path, worker_enabled=is_started(),
+                            sync_running=is_syncing())
     st.divider()
     st.markdown("### ℹ️ System Status")
     template_exists = os.path.exists(edited['template_path'])

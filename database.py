@@ -500,6 +500,22 @@ def _online_sync_ready(conn):
         return False
 
 
+def _notify_sync_worker():
+    """Fire-and-forget background Sync V2 wake after a committed local write.
+
+    Returns immediately; NEVER performs network work inside a CRUD transaction
+    (local-first). No-op when running on PostgreSQL (the Online app) or when no
+    background worker is running (e.g. CLI scripts/tests)."""
+    if USE_POSTGRES:
+        return
+    try:
+        from sync_v2_worker import notify
+        notify()
+    except Exception:
+        pass
+
+
+
 def _live_where(conn):
     """SQL fragment that hides Sync V2 tombstones from normal business views.
     Returns 'deleted_at IS NULL' when the tombstone column exists (SQLite and,
@@ -805,6 +821,7 @@ def add_record(invoice_no, data, serial_no, xcell, dp_taken, product_given, give
             enqueue_create(conn, new_id)
             _commit(conn)
             invalidate_cache()
+            _notify_sync_worker()
             return new_id
         if _online_sync_ready(conn):
             # Online (Render/Neon) create: Sync-V2-aware seam assigns a stable
@@ -868,6 +885,7 @@ def update_record(record_id, invoice_no, data, serial_no, xcell, dp_taken, produ
             finalize_edit(conn, row, business)
             _commit(conn)
             invalidate_cache()
+            _notify_sync_worker()
             return True
         if _online_sync_ready(conn):
             # Online edit: preserve sync_id, allocate a server revision, advance
@@ -931,6 +949,7 @@ def delete_record(record_id):
                 coalesce(conn)
             _commit(conn)
             invalidate_cache()
+            _notify_sync_worker()
             return True
         if _online_sync_ready(conn):
             # Online delete: Sync V2 NEVER physically deletes. The seam stamps a
@@ -1227,6 +1246,7 @@ def swap_sr_no(id1, id2):
             coalesce(conn)
             _commit(conn)
             invalidate_cache()
+            _notify_sync_worker()
             return True
         if _online_sync_ready(conn):
             # Online SR move: one server revision per affected row in ONE

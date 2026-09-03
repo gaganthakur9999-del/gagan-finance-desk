@@ -49,6 +49,21 @@ logging.getLogger().addHandler(_handler)
 logging.getLogger().setLevel(logging.ERROR)
 
 # =========================
+# SYNC V2 BACKGROUND WORKER (Offline ONLY)
+# =========================
+# Starts the background Sync V2 worker for the desktop/SQLite app (local-first:
+# it never blocks CRUD and never runs inside a write transaction). It is NEVER
+# started on Render/PostgreSQL - the Online app only captures writes via the
+# Online seam and has no worker and no Sync button.
+try:
+    import database as _db
+    if not _db.USE_POSTGRES:
+        from sync_v2_worker import start_worker
+        start_worker(_db.DB_FILE)
+except Exception:
+    pass
+
+# =========================
 # PAGE ROUTING
 # =========================
 # Pages are imported LAZILY inside their routing branch so the Dashboard (or any

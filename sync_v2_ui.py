@@ -62,25 +62,27 @@ def _collect_views(engine, db_path):
                                       lambda sid: state.read_local_record(db_path, sid))
 
 
-def render_settings_section(db_path, engine=None, sync_running=False):
-    """Settings-page Sync V2 status block (transitional; distinct from Old Sync).
+def render_settings_section(db_path, engine=None, sync_running=False,
+                            engine_busy=False, worker_enabled=False):
+    """Settings-page Sync V2 status block.
 
-    Never starts synchronization. When no engine/server is attached the section
-    shows local readiness only.
+    Never starts synchronization by itself - the background worker owns sync
+    runs. When a worker is enabled (Offline app) this reports LIVE state from
+    sync_state (Synced/Offline/Error/etc.). Without a worker it shows local
+    readiness only.
     """
     flash()
     local = state.read_local_sync_status(db_path)
-    if engine is None:
-        # Transitional phase: without a connected Sync V2 service the section
-        # shows local readiness only and never claims Sync V2 is active.
+    if engine is None and not worker_enabled:
+        # Transitional phase: no worker -> local readiness only ("Not active").
         status = state.STATUS_READY
     else:
-        status = state.classify_status(local, engine_busy=True,
+        status = state.classify_status(local, engine_busy=engine_busy,
                                        sync_running=sync_running)
     st.markdown("### 🔄 Sync V2 — Status")
-    st.caption("New synchronisation preview. The classic **Sync Now** above is "
-               "unchanged and still controls the old sync.")
-    st.markdown("**%s**" % status_markup(status))
+    st.caption("Background sync for this desktop app. The classic **Sync Now** "
+               "above is unchanged and still controls the old sync.")
+    st.markdown("**%s**" % status_markup(status), unsafe_allow_html=True)
 
     detail_state = local.get("state") or {}
     with st.expander("Sync V2 status details", expanded=False):
@@ -89,27 +91,31 @@ def render_settings_section(db_path, engine=None, sync_running=False):
             st.write("Last successful sync: **%s** (%s)" % (
                 last_sync, state.human_ago(detail_state.get("last_success_at"))))
         else:
-            st.write("No Sync V2 sync has run yet.")
+            st.write("No Sync V2 sync has completed yet.")
         outbox = local.get("outbox") or {}
         pending = (outbox.get("pending", 0) or 0) + (outbox.get("in_flight", 0) or 0)
         st.write("Changes saved locally, not yet pushed: **%d**" % pending)
         if detail_state.get("last_error"):
             st.write("Last sync note: %s" % detail_state.get("last_error"))
-        if engine is None:
-            st.caption("Sync V2 is not connected yet. Conflict review becomes "
-                       "available in a later phase.")
-        else:
+        if engine is not None:
             conflicts = engine.get_open_conflicts()
             st.write("Conflicts needing review: **%d**" % len(conflicts))
+        else:
+            st.write("Conflicts needing review: **%d**"
+                     % (local.get("local_open_conflicts") or 0))
 
     if engine is not None:
-        st.caption("Review and resolve below. Sync V2 is not run automatically.")
+        st.caption("Review and resolve below.")
         views = _collect_views(engine, db_path)
         if views:
             st.markdown("#### Records needing attention")
             render_attention_center(engine, db_path)
         else:
             st.write("No records currently need attention.")
+    elif worker_enabled and (local.get("local_open_conflicts") or 0):
+        st.caption("Open conflicts are waiting. Keep working locally - data "
+                   "stays safe until they are resolved.")
+
 
 
 def render_offline_warning(st_=None, last_sync_text=None, dismiss_key="sv2_offline",
