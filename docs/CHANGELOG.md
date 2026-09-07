@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-02 — Sync V2 synchronization foundation
+
+- Added Sync V2 schema/identity (`sync_schema.py`): `records` sync_id/server_rev/row_rev/base_json/deleted_at plus outbox, applied_ops, conflicts, sync_state, sync_sequence.
+- Added the Offline local-first write path (`sync_write.py`): every create/edit/delete/reorder writes one durable transactional outbox op; deletes are tombstones.
+- Added the Online write seam (`online_write.py`) so Online-created records carry Sync V2 identity and are pull-discoverable.
+- Added the automatic background worker (`sync_v2_worker.py`, `sync_v2_client.py`) and the Sync V2 status/conflict UI in Settings.
+- Fixed a real-PostgreSQL concurrency race (silent last-writer-wins on same-record writes) with an optimistic `server_rev` write guard + bounded retry.
+- Validated 43/43 E2E + Online seam + BASE semantics + invariants + concurrency tests on a disposable PostgreSQL 16.4 before cutover.
+
+## 2026-09-03 — Sync V2 production cutover / old manual sync retired
+
+- Retired the legacy manual sync scripts (`scripts/sync/sync_offline_to_online.py` and `scripts/sync/sync_online_to_offline.py`), their `Sync *.bat` launchers, and the Settings “Sync Now” manual cloud-sync button.
+- Automatic Sync V2 background synchronization is now the only sync path (Offline master; Online-created records are pulled back automatically).
+- EMI Notification candidates fixed (SQL `%`-formatting collision with the `LIKE '%/%'` literal).
+
 All notable changes to **Gagan Finance Desk** are documented in this file.
 
 This changelog tracks changes **from the current production baseline onward**. It does **not** attempt to reconstruct older history — the complete development history is preserved separately in [`PROJECT_HISTORY.md`](./PROJECT_HISTORY.md).

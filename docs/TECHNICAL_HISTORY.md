@@ -130,6 +130,121 @@
 
 ---
 
+
+
+### Sync V2 - current automatic synchronization (September 2026)
+
+Finance Desk is an Offline-master program. The desktop (SQLite) app creates,
+edits, deletes and reorders records; every write commits locally first and is
+then pushed automatically by a background worker. The Render/Neon app is the
+Online replica: it runs on PostgreSQL via `DATABASE_URL`, may create new records
+through the Sync V2 Online seam, and never runs the Offline worker or shows local
+sync controls. The old manual push/pull scripts and Settings "Sync Now" were
+retired in September 2026.
+
+**Modules.** `syncv2/` is a pure-Python engine package (no streamlit):
+
+| Module | Responsibility |
+|--------|----------------|
+| `protocol` | field classification, op types, outbox/conflict statuses, session states, `SyncResult` |
+| `merge` | pure three-way merge, month derivation, invoice collision, SR ordering, tombstone rules |
+| `store` | dual-backend primitives (`is_pg=False` SQLite / `is_pg=True` PostgreSQL) |
+| `server` | coordinator: monotonic global revisions, idempotency ledger, optimistic concurrency, apply/pull/resolve |
+| `engine` | `SyncEngine` client: single-flight, pull/merge/push/finalize, status |
+| `retry` | exponential backoff + jitter, temporary-vs-permanent classification |
+
+Supporting app modules: `sync_write.py` (offline transactional outbox write
+service used by `database.py`), `online_write.py` (Online seam), `sync_schema.py`
+(schema DDL/translation), `sync_v2_client.py` (Neon adapter), `sync_v2_worker.py`
+(Offline background worker), and `sync_v2_state.py` / `sync_v2_ui.py` (status +
+conflict views in Settings). `sync_schema` added `sync_id`, `server_rev`,
+`row_rev`, `base_json`, `deleted_at` to `records` plus `outbox`, `applied_ops`,
+`conflicts`, `sync_state`, `sync_sequence` and a unique index on
+`records(sync_id)`.
+
+**Sync protocol.** Session flow
+`IDLE -> CONNECTING -> PULL -> MERGE -> PUSH -> FINALIZE -> IDLE`, plus
+`OFFLINE / ERROR / CONFLICT / NEEDS_ATTENTION / BUSY`.
+1. **PULL** - server rows with `server_rev > last_pulled_sync_rev` (incremental).
+2. **MERGE** - rows without a pending local op are three-way merged against the
+   shared `base_json`; rows with a pending op are skipped and re-fetched after push.
+3. **PUSH** - coalesced upserts are sent in batches; every op commits
+   independently server-side, and on the first op error the batch stops and later
+   ops are re-queued locally.
+4. **FINALIZE** - a second pull converges local rows to the resolved server
+   state; `base_json` advances only here, `row_rev` resets, and the pull
+   watermark advances.
+
+**Revision and identity model.** `sync_id` is the stable cross-database identity
+(invoice/BID/serial/DB id are never identity). `server_rev` is the global server
+revision (`sync_sequence`), `row_rev` counts unsynced local edits, and
+`base_json` is the ancestor of the last mutually-agreed state. `sync_sequence`
+increments only when a change actually commits - retries, failed transactions
+and conflict-only events never allocate a revision.
+
+**Outbox lifecycle.** `pending -> in_flight -> applied`, with `superseded`
+(coalescing keeps the latest payload with the OLDEST base ancestor),
+`blocked` (open conflict on the sync_id; never resent while open) and `failed`
+(permanent errors).
+
+**Conflict model.** The `conflicts` table stores `base/offline/online` plus kind,
+field and month. On conflict nothing is applied, no baseline advances and the op
+is not marked applied. One conflict record is persisted per genuinely
+conflicting field; multi-field divergence keeps every field resolvable, and the
+Offline replica converges only after the record's last open conflict is resolved.
+Resolution applies the chosen value (Keep Offline / Keep Online / Review-Merge),
+sets the server `base_json` to the resolved snapshot, allocates one revision, is
+idempotent, and re-opens only when that conflict's own state moved again.
+
+**Deletion model.** Deletes are `deleted_at` tombstones, never physical
+removals. Offline delete, Online delete and both-delete converge; delete-vs-edit
+is a `delete_edit` conflict in both directions. A stale replica can never
+resurrect a tombstoned record, repeated deletes are no-ops, and tombstones are
+invisible to every normal business view.
+
+**Invoice and SR.** Invoice is editable business data belonging to one identity;
+two distinct sync_ids owning the same normalized invoice create an advisory
+`invoice_collision` (both preserved, never merged or renumbered). SR is
+month-scoped ordering: one-sided reorders propagate normally, while a both-sides
+reorder of the same month opens ONE grouped `sr_ordering` conflict per month
+(base/offline/online sequences stored as JSON) whose resolution applies one
+deterministic ordering to every affected server row. `month` is derived from
+`bid_date`.
+
+**Failure recovery and retry.** Ops are idempotent (`applied_ops` replays a
+stored result without a new revision). In-flight ops reset to pending on
+restart/failure; single-flight is enforced in-process with an optional O_EXCL
+file lock; blocked ops whose conflict was resolved by another engine are retired
+on the next run. Temporary failures re-queue with exponential backoff + jitter;
+permanent failures go to `failed`/needs attention.
+
+**Concurrency.** On PostgreSQL `next_revision` serializes through a row lock on
+`sync_sequence`. Real-PostgreSQL concurrency testing (Sep 2026) exposed a
+silent last-writer-wins race when two writers edited the same record at the same
+time: the server merged against a snapshot but wrote without a row-level guard.
+The fix adds an optimistic `server_rev` WHERE guard to the row write plus a
+bounded retry in `apply_one`, so the race is re-detected and surfaced as a real
+conflict instead of a lost update.
+
+**Offline worker.** `sync_v2_worker.py` starts only when `DATABASE_URL` is absent
+(`app.py`). It runs one sync on startup, wakes after every committed local write
+(`database.py` notifies it with a non-blocking event after commit) and retries
+periodically. Failures are recorded in `sync_state`; outbox operations are
+preserved; the worker never calls Streamlit, and no CRUD path performs network
+work.
+
+**Online seam and adoption.** `online_write.py` captures Online-originated
+create/edit/delete/SR writes (stable sync_id, one server revision per change,
+tombstone deletes, no server-side outbox) and refuses legacy NULL/blank-sync rows
+until they are adopted. The single legacy NULL-sync production pair was adopted
+under the exact-counterpart rule with one shared uuid, identical `base_json` and
+zero revisions/outbox/conflicts; production now has zero NULL-sync identities.
+
+Validation: the engine and seams were validated against a disposable PostgreSQL
+16.4 (43/43 E2E matrix + Online seam + BASE semantics + invariants + concurrency
+tests) before the production cutover. All code paths are backend-agnostic and
+covered by the committed SQLite twin regression suites in `tests/`.
+
 ## Query Optimization Timeline (SQL)
 
 1. **Jun 2026 (prototype):** all reads via `SELECT *` from SQLite (`load_all_records` everywhere); months derived in Python.

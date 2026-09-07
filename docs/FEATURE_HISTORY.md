@@ -77,10 +77,16 @@
 | Feature | Purpose | Date | Status | Related files |
 |---------|---------|------|--------|---------------|
 | PostgreSQL / Neon support (`DATABASE_URL`) | Run on Render/cloud | 18 Jul 2026 ✅ | ✅ Active | `database.py` |
-| Offline→Online sync script + `.bat` | Push local records to Neon | 18–31 Jul 2026 ✅ | ✅ Active | `sync_offline_to_online.py`, `Sync Offline to Online.bat` |
-| Online→Offline sync script + `.bat` | Pull Neon records to desktop | 18–31 Jul 2026 ✅ | ✅ Active | `sync_online_to_offline.py`, `Sync Online to Offline.bat` |
-| Settings → Sync Now (UI button) | One-click push to cloud | 18–31 Jul 2026 ✅ | ✅ Active | `pages/settings._sync_now` |
-| Dedup-by-(invoice, serial) during sync | Prevent duplicates across copies | 18–31 Jul 2026 ✅ | ✅ Active | `sync_*.py`, `settings._sync_now` |
+| Offline→Online sync script + `.bat` | Push local records to Neon | 18–31 Jul 2026 ✅ | ✅ Retired 2026-09 (Sync V2 auto) | `sync_offline_to_online.py`, `Sync Offline to Online.bat` |
+| Online→Offline sync script + `.bat` | Pull Neon records to desktop | 18–31 Jul 2026 ✅ | ✅ Retired 2026-09 (Sync V2 auto) | `sync_online_to_offline.py`, `Sync Online to Offline.bat` |
+| Settings → Sync Now (UI button) | One-click push to cloud | 18–31 Jul 2026 ✅ | ✅ Retired 2026-09 (Sync V2 auto) | `pages/settings._sync_now` |
+| Dedup-by-(invoice, serial) during the old sync | Prevent duplicates across copies | 18–31 Jul 2026 ✅ | ✅ Retired 2026-09 (Sync V2 sync_id identity) | old sync scripts (retired) |
+| Sync V2 schema + sync_id identity | Cross-database identity and revision metadata | 2 Sep 2026 ✅ | ✅ Active | `sync_schema.py`, `database.py` |
+| Sync V2 offline write path | Local-first durable outbox for create/edit/delete/reorder | 2 Sep 2026 ✅ | ✅ Active | `sync_write.py`, `database.py` |
+| Online Sync V2 write seam | Online-created records get sync_id/server_rev; tombstone deletes | 2 Sep 2026 ✅ | ✅ Active | `online_write.py`, `database.py` |
+| Automatic background sync (Offline) | Worker syncs on startup, after local writes, and on periodic retry | 3 Sep 2026 ✅ | ✅ Active | `sync_v2_worker.py`, `sync_v2_client.py`, `app.py` |
+| Sync V2 status + conflict review (Settings) | Live status and Keep Offline/Online/Merge resolution | 2-3 Sep 2026 ✅ | ✅ Active | `sync_v2_state.py`, `sync_v2_ui.py`, `pages/settings.py` |
+| NULL-sync legacy adoption | Shared uuid identity for the legacy pair; 0 NULL-sync remain | 3 Sep 2026 ✅ | ✅ Completed (one-time) | - |
 
 ## UI/UX
 
@@ -124,7 +130,7 @@
 | `get_monthly_card_stats()` grouped query | One round trip for all monthly cards | 20 Aug 2026 ✅ | ✅ Active | `database.py`, `ui_components.py` |
 | PostgreSQL Excel-download fingerprint cache | No full workbook rebuild on every rerun (Neon) | 20 Aug 2026 ✅ | ✅ Active | `pages/records.py`, `database.get_db_fingerprint` |
 | Reuse `search_records()` total (no duplicate COUNT) | One fewer query per Records rerun | 20 Aug 2026 ✅ | ✅ Active | `pages/records.py` |
-| Batched Settings Sync Now (`executemany`) | One connection + transaction instead of one per record | 20 Aug 2026 ✅ | ✅ Active | `pages/settings.py` |
+| Batched Settings Sync Now (`executemany`) | One connection + transaction instead of one per record | 20 Aug 2026 ✅ | ✅ Retired 2026-09 (Sync V2 auto) | `pages/settings.py` |
 | Lazy page/module imports | Dashboard no longer loads PDF/DOCX/Excel stack | 20 Aug 2026 ✅ | ✅ Active | `app.py`, `ui_components.py`, `pages/records.py` |
 | Invoice-number / manual-entry lazy evaluation | No SQL when the value already exists | 20 Aug 2026 ✅ | ✅ Active | `pages/generate_invoice.py`, `ui_components.py` |
 | `PERF_DEBUG=1` instrumentation | Optional query/pool timing (off by default) | 20 Aug 2026 ✅ | ✅ Active | `database.py` |

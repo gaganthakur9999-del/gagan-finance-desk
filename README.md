@@ -29,8 +29,9 @@ Upload a Bajaj DO PDF on **Generate Invoice**, confirm the extracted details, an
 - Maintain a month-by-month records ledger (SR number per month, `YYMM + counter` invoice numbers).
 - Keep `Excel/ALL_RECORDS.xlsx` current (one sheet per month) and export it from the app.
 - Track totals (records, DP, DI) and per-month/per-day charts on the Dashboard.
-- See which customers' EMIs end in the next two months (EMI Notification tab).
+- See which customers' EMIs end in the next two months (EMI Notification tab; candidate query fixed Sep 2026).
 - Search, filter, sort, paginate, bulk-delete, edit, regenerate invoices, and re-order rows.
+- Sync V2 runs automatically in the background on the desktop app (see [Synchronization](#synchronization)).
 
 ---
 
@@ -43,8 +44,8 @@ Upload a Bajaj DO PDF on **Generate Invoice**, confirm the extracted details, an
 - Dashboard charts
 - EMI end-date notifications
 - Full Records management (search / edit / delete / regenerate / move)
-- Settings (GST rates, paths, theme, DB backup/restore, cloud sync)
-- SQLite ↔ Neon synchronization (dedup by invoice + serial)
+- Settings (GST rates, paths, theme, DB backup/restore, Sync V2 status)
+- **Sync V2** — automatic background synchronization: master-first Offline, Online-created records pull back, tombstone deletes, revision/conflict tracking
 
 > **Screenshots:** coming soon — will show the invoice flow, dashboard, records table, and EMI notification views.
 
@@ -135,8 +136,9 @@ Settings persist in `config/settings.json` (edit in the Settings page): template
 
 Environment variables:
 
-- `DATABASE_URL` — set on Render to point to Neon PostgreSQL (app switches to PostgreSQL).
-- `NEON_URL` — used by the sync scripts and Settings → Sync Now.
+- `DATABASE_URL` — set on Render to point to Neon PostgreSQL (the Online/Render app switches to PostgreSQL; it never runs the desktop background worker).
+- `NEON_URL` — used by the Offline Sync V2 background worker to reach Neon.
+- `FINANCE_DB_PATH` — optional override of the local SQLite path (defaults to `data/finance.db`).
 
 ---
 
@@ -162,17 +164,33 @@ Start the app, then:
 
 4. Set the environment variable `DATABASE_URL` to your Neon connection string (`sslmode=require`).
 5. Deploy — the app uses PostgreSQL automatically; DOCX download works everywhere; PDF/PNG preview is Windows-only by design.
+6. The Online/Render service **never** starts the Offline background worker and **never** shows local database backup/restore or sync-button controls — the desktop-only tools are gated behind the absence of `DATABASE_URL`.
 
 ---
 
 ## Synchronization
 
-```bash
-python scripts/sync/sync_offline_to_online.py   # SQLite → Neon
-python scripts/sync/sync_online_to_offline.py   # Neon → SQLite
+### Sync V2 (current, automatic)
+
+Sync V2 is the production synchronization system. It is active automatically on the **Offline (desktop/SQLite)** application only; the Online/Render app never runs a background worker and exposes no sync controls.
+
+- **Offline is the master.** Offline can create, edit, delete and reorder records. Writes are **local-first**: the SQLite transaction commits and the durable outbox entry is written immediately, then the background worker is notified — normal CRUD never waits for the network.
+- **Background worker** (`sync_v2_worker.py`): starts when Offline opens, runs one sync session, then waits for write notifications with periodic retries when connectivity is unavailable. Failures are recorded in `sync_state`; local data and pending outbox operations are preserved.
+- **Online may create new records.** Online-created rows receive a Sync V2 `sync_id`, a server revision and base snapshot through the Online write seam, and are pulled back into Offline by the worker. Online is not an independent editing master.
+
+Actual data flow:
+
+```text
+Offline local change → SQLite commit → durable outbox → background worker → Neon
+Online new record    → Neon (Sync V2 metadata) → background worker → Offline SQLite
 ```
 
-Records are deduplicated by `(invoice_no, serial_no)`; `bid_date` is normalized to `DD-MM-YYYY` on every write path. Windows launchers are included (`Sync *.bat`).
+- **Identity:** `sync_id` is the stable cross-database identity. All legacy NULL-sync production records have been adopted; production now has **0** remaining NULL-sync identities.
+- **Deletes:** Sync V2 tombstones (sets `deleted_at`) instead of instantly destroying synchronization history. Tombstoned records disappear from all normal/live reads and cannot be resurrected by a later sync.
+- **Conflicts:** changes carry revision/base snapshots and go through a three-way merge. Safe independent field changes merge; same-field/divergent changes become explicit conflicts that are never silently overwritten. SR (serial-order) moves use grouped month-level conflict handling. Conflicts are resolved through the existing Keep Offline / Keep Online / Review-Merge choices.
+- **Settings page (Offline):** shows live Sync V2 status (synced / syncing / error / pending / conflicts needing review), last successful sync, and local pending count. No manual sync button is needed.
+
+> Historical/technical detail lives in the canonical docs: architecture in `docs/TECHNICAL_HISTORY.md`, milestones in `docs/PROJECT_HISTORY.md`, and dated changes in `docs/CHANGELOG.md`.
 
 ---
 
@@ -187,11 +205,12 @@ Records are deduplicated by `(invoice_no, serial_no)`; `bid_date` is normalized 
 
 ## Current Status
 
-- **GitHub:** `main` = `84aa752` (local HEAD == origin/main)
-- **Render:** deployed; uses Neon via `DATABASE_URL`
-- **Neon:** synchronized with local dataset; all `bid_date` values `DD-MM-YYYY`
-- **SQLite:** 1,395 records, canonical dates, verified month consistency
-- **Backups:** per-invoice JSON (`Backups/`), SQLite snapshots (`data/`), Settings backup/restore
+- **GitHub:** `main` = `9ac24f3` (local HEAD == origin/main at last documentation update)
+- **Sync V2:** deployed and live — automatic background sync works on Offline; Online-created records automatically reach Offline; legacy NULL-sync identities adopted (0 remain)
+- **Render:** deployed; uses Neon via `DATABASE_URL`; no background worker; local sync/backup controls hidden
+- **Neon ↔ SQLite:** production live record counts match (1,527 live on each at last verification); no open conflicts; outbox clean
+- **EMI Notification:** candidate-query bug fixed (Sep 2026); notifications show correctly again
+- **Backups:** per-invoice JSON (`Backups/`), SQLite snapshots (`data/` + timestamped `Backups/` pre-change snapshots), Settings backup/restore (desktop only)
 
 ---
 
@@ -200,10 +219,14 @@ Records are deduplicated by `(invoice_no, serial_no)`; `bid_date` is normalized 
 - Incremental Excel-update engine (update only the affected month sheet)
 - Full-text search (FTS5) for the Records page
 - Index fix for `LOWER()`-based invoice/serial uniqueness checks
-- Batch Neon synchronization (single connection + `executemany`)
 - Precomputed monthly summary for dashboard/stats at scale
+- Connected conflict-review surface in the Offline Settings page (attach the running engine to the existing Sync V2 review UI)
 
-These are identified, verified opportunities from the technical audit — not commitments.
+These are identified, verified opportunities from the technical audit — not commitments. The Sync V2 foundation itself (automatic worker, Online seam, adoption) is **shipped**.
+
+## EMI Notification fix (September 2026)
+
+The EMI Notification page stopped showing any customers because `database.load_emi_candidates()` built its SQL with Python `%`-formatting while the query contained the `LIKE '%/%'` wildcard literal — every call raised a silent format error and the function returned an empty list (on both SQLite and PostgreSQL). The SQL literal was corrected to `LIKE '%%/%%'` (the escaped form for `%`-formatting). EMI candidates are returned again and the notifications show the correct upcoming EMI-ending months.
 
 ---
 

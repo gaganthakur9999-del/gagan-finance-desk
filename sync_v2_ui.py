@@ -80,8 +80,8 @@ def render_settings_section(db_path, engine=None, sync_running=False,
         status = state.classify_status(local, engine_busy=engine_busy,
                                        sync_running=sync_running)
     st.markdown("### 🔄 Sync V2 — Status")
-    st.caption("Background sync for this desktop app. The classic **Sync Now** "
-               "above is unchanged and still controls the old sync.")
+    st.caption("Automatic background sync is active for this desktop app (Sync V2). "
+               "No manual sync button is needed.")
     st.markdown("**%s**" % status_markup(status), unsafe_allow_html=True)
 
     detail_state = local.get("state") or {}

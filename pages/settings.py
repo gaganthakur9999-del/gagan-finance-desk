@@ -14,97 +14,6 @@ from sync_v2_ui import render_settings_section
 import database as db
 
 
-def _get_neon_url():
-    """Get Neon PostgreSQL connection string from env or .env file."""
-    url = os.environ.get("NEON_URL", "")
-    if url:
-        return url
-    env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
-    if os.path.exists(env_file):
-        with open(env_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("NEON_URL="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return ""
-
-
-def _sync_now():
-    """Push all local SQLite records to Neon cloud.
-
-    Batched for performance: one connection + one transaction + executemany
-    instead of a separate Neon connect/commit per record. Dedup key and sr_no
-    assignment logic are unchanged from the previous per-record version."""
-    neon_url = _get_neon_url()
-    if not neon_url:
-        st.error("❌ NEON_URL not configured. Copy .env.example to .env and add your Neon connection string.")
-        return
-    try:
-        import psycopg2
-    except ImportError:
-        st.error("❌ psycopg2 not installed. Run: pip install psycopg2-binary")
-        return
-
-    records = db.load_all_records()
-    synced = 0
-    skipped = 0
-    failures = []
-    try:
-        conn = psycopg2.connect(neon_url)
-        cur = conn.cursor()
-        try:
-            cur.execute("SELECT invoice_no, serial_no FROM records")
-            online_keys = {(r[0] or "", r[1] or "") for r in cur.fetchall()}
-            # Precompute the highest sr_no per month once, then increment in
-            # Python - produces the same numbering as the previous per-record
-            # MAX(sr_no) query.
-            cur.execute("SELECT month, MAX(sr_no) FROM records GROUP BY month")
-            month_max = {r[0] or "": int(r[1] or 0) for r in cur.fetchall()}
-            rows = []
-            for rec in records:
-                key = (str(rec.get("invoice_no") or ""), str(rec.get("serial_no") or ""))
-                if key in online_keys:
-                    skipped += 1
-                    continue
-                month = rec.get("month") or ""
-                sr = month_max.get(month, 0) + 1
-                month_max[month] = sr
-                rows.append((
-                    sr, _normalize_date(rec.get("bid_date", "")), rec.get("invoice_no", ""), rec.get("name", ""),
-                    rec.get("xcell", ""), rec.get("product", ""), rec.get("serial_no", ""),
-                    float(rec.get("price", 0) or 0), float(rec.get("emi", 0) or 0), float(rec.get("di", 0) or 0),
-                    rec.get("bid", ""), float(rec.get("dp_taken", 0) or 0), rec.get("scheme", ""),
-                    rec.get("actual_product", ""), float(rec.get("given_prod_price", 0) or 0),
-                    rec.get("phone", ""), rec.get("alt_phone", ""), month, rec.get("remarks", ""),
-                ))
-            if rows:
-                cur.executemany("""
-                    INSERT INTO records (sr_no,bid_date,invoice_no,name,xcell,product,serial_no,
-                        price,emi,di,bid,dp_taken,scheme,actual_product,given_prod_price,
-                        phone,alt_phone,month,remarks)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """, rows)
-            conn.commit()
-            synced = len(rows)
-        except Exception as e:
-            conn.rollback()
-            failures.append(str(e))
-        finally:
-            cur.close()
-            conn.close()
-    except Exception as e:
-        st.error(f"❌ Failed to connect to Neon: {e}")
-        return
-
-    db.invalidate_cache()
-    log_activity("SYNC", f"Cloud sync: {synced} synced, {skipped} skipped, {len(failures)} failed")
-    st.success(f"✅ Sync complete! {synced} synced, {skipped} skipped, {len(failures)} failed.")
-    if failures:
-        st.warning("⚠️ Some records failed:")
-        for failure in failures[:5]:
-            st.error(f"❌ {failure}")
-
-
 def page_settings():
     app_header()
     st.subheader("⚙️ Settings")
@@ -145,7 +54,7 @@ def page_settings():
 
     if db.USE_POSTGRES:
         # Render/Neon deployment: no local SQLite database exists here, so the
-        # local-only tools below (backup/restore, classic Sync Now, Sync V2 local
+        # local-only tools below (backup/restore, Sync V2 local
         # status) are desktop features and MUST NOT render on the Online app.
         st.divider()
         st.markdown("### ☁️ Remote (Render/Neon)")
@@ -175,12 +84,6 @@ def page_settings():
             except (OSError, IOError) as e:
                 st.error(f"❌ Failed: {str(e)}")
 
-    st.divider()
-    st.markdown("### ☁️ Cloud Sync")
-    st.caption("Push your local records to the Neon cloud database.")
-    if st.button("🔄 Sync Now", width="stretch", type="primary"):
-        with st.spinner("🔄 Syncing records to cloud..."):
-            _sync_now()
 
     st.divider()
     from sync_v2_worker import is_started, is_syncing

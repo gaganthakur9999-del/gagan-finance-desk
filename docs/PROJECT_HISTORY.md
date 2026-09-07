@@ -194,6 +194,24 @@ Late July 2026 — Cross-platform PDF (fpdf2/mammoth+weasyprint), sync scripts, 
 
 ---
 
+### 23. Sync V2 synchronization foundation (2 Sep 2026)
+
+Sync V2 replaced the manual one-way sync scripts with a real bidirectional,
+revision-based synchronization system: a shared `sync_id` identity, transactional
+outbox writes on Offline (tombstones, never physical deletes), an Online write
+seam on Render/Neon, three-way merge with explicit conflicts and grouped SR
+ordering, and a full engine validated 43/43 on a disposable PostgreSQL 16.4
+(including a concurrency race fix for same-record writers).
+
+### 24. Production cutover - automatic sync, adoption, EMI fix, old-sync retirement (3 Sep 2026)
+
+Deployed the Sync V2-aware Online seam, enabled the Offline automatic background
+worker, verified Online-created records syncing back to Offline, adopted the one
+legacy NULL-sync identity (0 remain), fixed the EMI Notification candidate query, 
+and retired the old manual sync scripts / Settings Sync Now. Production is fully
+automatic: Offline is master, Online may create new records, and both replicas
+converge without manual sync steps.
+
 ## Categorized History
 
 **Initial Development**
