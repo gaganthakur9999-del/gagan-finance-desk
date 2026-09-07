@@ -112,7 +112,6 @@ def _show_manual_entry():
     """Collapsed manual entry form for adding invoices without PDF."""
     # Imported lazily so collapsed reruns / other pages never pay the
     # openpyxl/docxtpl import cost unless this form is actually used.
-    from excel_utils import update_excel_file
     from invoice import suggest_next_invoice
     with st.expander("➕ Add Manually (No PDF)", expanded=False):
         st.markdown("**Customer Details**")
@@ -182,7 +181,6 @@ def _show_manual_entry():
                         remarks=m_remarks.strip(),
                     )
                     log_activity("MANUAL_ENTRY", f"Manual invoice {m_invoice} for {m_name}")
-                    update_excel_file()
                 st.success(f"✅ Invoice {m_invoice} saved!")
                 st.rerun()
             except (sqlite3.Error, ValueError) as e:

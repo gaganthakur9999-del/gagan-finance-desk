@@ -10,7 +10,7 @@ from typing import Dict, List
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from config import EXCEL_FILE, HEADERS
+from config import HEADERS
 from helpers import _normalize_date, _parse_date
 from database import month_sort_key
 import database as db
@@ -53,14 +53,6 @@ def style_header(ws):
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", start_color="1F4E78")
         cell.alignment = Alignment(horizontal="center", vertical="center")
-
-
-def update_excel_file():
-    records = db.load_all_records()
-    if records:
-        wb = export_to_excel(records)
-        wb.save(EXCEL_FILE)
-        logging.info(f"Excel updated: {len(records)} records")
 
 
 def export_to_excel(records):

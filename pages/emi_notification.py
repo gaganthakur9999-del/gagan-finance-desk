@@ -74,6 +74,29 @@ def _show_table(title, rows):
     st.dataframe(display, width="stretch", hide_index=True)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _month_map_for_fingerprint(_fingerprint):
+    """Build the EMI month map {(year, month): [customer info]}.
+
+    Pure function of the records table, so it is cached keyed on the DB
+    fingerprint. The SQL candidate load plus the Python EMI date math run once
+    per actual records content - never on every Streamlit rerun or month
+    navigation. Writes change the fingerprint (and call invalidate_cache()),
+    so the map is rebuilt only when the underlying records change.
+
+    _fingerprint: the hashable db.get_db_fingerprint() tuple (value is not used
+    for computation - it only keys the cache).
+    """
+    month_map = {}
+    for record in db.load_emi_candidates():
+        info = compute_emi_info(record)
+        if not info:
+            continue
+        key = (info["last_emi"].year, info["last_emi"].month)
+        month_map.setdefault(key, []).append(info)
+    return month_map
+
+
 def page_emi_notification():
     app_header()
     if "emi_offset" not in st.session_state:
@@ -84,15 +107,8 @@ def page_emi_notification():
     month1 = base_month
     month2 = add_months(base_month, 1)
 
-    # Build a map: (year, month) -> list of customers ending that month.
-    # Optimized: fetch only the columns the EMI logic needs, pre-filtered in SQL.
-    month_map = {}
-    for record in db.load_emi_candidates():
-        info = compute_emi_info(record)
-        if not info:
-            continue
-        key = (info["last_emi"].year, info["last_emi"].month)
-        month_map.setdefault(key, []).append(info)
+    # Month map is cached by DB fingerprint (see _month_map_for_fingerprint).
+    month_map = _month_map_for_fingerprint(db.get_db_fingerprint())
 
     st.caption(f"Today: {now.strftime('%d-%m-%Y')}")
 

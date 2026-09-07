@@ -320,7 +320,7 @@ app.py                        (75 LOC)  — entry: config → CSS → logging �
 - `pdf_extract.py` — regex extraction of name, product, price, mobile, address, DO ID, date, EMI, DI, scheme from Bajaj DO PDFs; missing-field warnings flag low-confidence results.
 
 ### Excel Engine
-- `excel_utils.py` — one sheet per month (`MONTH_YYYY`, newest first), 18 business columns, styled header, alternating rows with hoisted reusable style objects (Option E), auto column widths (12–45), regenerated on every save (`update_excel_file`) and served as cached download when current.
+- `excel_utils.py` — one sheet per month (`MONTH_YYYY`, newest first), 18 business columns, styled header, alternating rows with hoisted reusable style objects (Option E), auto column widths (12–45). The workbook is built **on request**: `pages/records._excel_download_bytes` regenerates it only when the user downloads/uses the Excel export on the Records page (session-cached per DB fingerprint). Record/invoice saves never rebuild the workbook.
 
 ### Dashboard
 - `pages/dashboard.py` — totals (records/DP/DI), monthly GROUP BY chart (ALL_MONTHS), daily chart per selected month (dates normalized for display); redundant monthly scan skipped when a month is chosen.

@@ -8,7 +8,6 @@ import sqlite3
 import streamlit as st
 
 from config import settings
-from excel_utils import update_excel_file
 from helpers import (
     _parse_date, amount_to_float, log_activity, show_error,
     extracted_data_for_display, validate_before_generate
@@ -139,8 +138,6 @@ def page_generate_invoice():
                     "actual_product": product_given, "given_product_price": given_prod_price,
                     "alt_phone": alt_phone,
                 })
-            with st.spinner("📊 Updating Excel file..."):
-                update_excel_file()
             st.session_state.generated = True
             st.session_state.docx_file = docx_file
             st.session_state.pdf_file = pdf_file
